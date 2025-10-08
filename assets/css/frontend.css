@@ -1,0 +1,115 @@
+/**
+ * Frontend CSS for Semantic Silo Pro
+ */
+
+/* Reading Progress Indicator */
+.ssp-reading-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background-color: rgba(0, 0, 0, 0.1);
+    z-index: 9999;
+}
+
+.ssp-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #0073aa, #00a0d2);
+    width: 0%;
+    transition: width 0.1s ease;
+}
+
+/* Related Content */
+.ssp-related-content {
+    margin-top: 30px;
+    padding: 20px;
+    background-color: #f9f9f9;
+    border-left: 4px solid #0073aa;
+    border-radius: 4px;
+}
+
+.ssp-related-content h3 {
+    margin-top: 0;
+    color: #0073aa;
+    font-size: 18px;
+}
+
+.ssp-related-content ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.ssp-related-content li {
+    margin-bottom: 10px;
+    padding-left: 20px;
+    position: relative;
+}
+
+.ssp-related-content li:before {
+    content: "→";
+    position: absolute;
+    left: 0;
+    color: #0073aa;
+    font-weight: bold;
+}
+
+.ssp-related-content a {
+    color: #0073aa;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.ssp-related-content a:hover {
+    text-decoration: underline;
+}
+
+/* Enhanced Internal Links */
+.ssp-enhanced-link {
+    position: relative;
+    text-decoration: none;
+    border-bottom: 1px dotted #0073aa;
+    transition: all 0.3s ease;
+}
+
+.ssp-enhanced-link:hover {
+    background-color: rgba(0, 115, 170, 0.1);
+    border-bottom-style: solid;
+}
+
+.ssp-enhanced-link:after {
+    content: "🔗";
+    font-size: 12px;
+    margin-left: 3px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.ssp-enhanced-link:hover:after {
+    opacity: 1;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .ssp-reading-progress {
+        height: 2px;
+    }
+    
+    .ssp-related-content {
+        margin-top: 20px;
+        padding: 15px;
+    }
+    
+    .ssp-related-content h3 {
+        font-size: 16px;
+    }
+}
+
+/* Print Styles */
+@media print {
+    .ssp-reading-progress,
+    .ssp-related-content {
+        display: none;
+    }
+}
