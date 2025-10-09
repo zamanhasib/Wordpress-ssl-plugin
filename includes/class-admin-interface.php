@@ -350,11 +350,65 @@ class SSP_Admin_Interface {
                 <label><input type="radio" name="linking_mode" value="custom"> Custom (Define your own pattern)</label>
             </div>
             
+            <!-- Custom Pattern Section -->
+            <div class="ssp-form-section ssp-mode-specific" id="custom-pattern-section" style="display: none;">
+                <h3>Custom Linking Pattern</h3>
+                
+                <!-- Load Saved Pattern -->
+                <div style="margin-bottom: 20px;">
+                    <label>Load Saved Pattern: 
+                        <select id="load-saved-pattern" class="ssp-select">
+                            <option value="">-- Select a saved pattern --</option>
+                            <?php
+                            $saved_patterns = get_option('ssp_saved_patterns', array());
+                            foreach ($saved_patterns as $pattern_name => $pattern_data) {
+                                echo '<option value="' . esc_attr($pattern_name) . '">' . esc_html($pattern_name) . '</option>';
+                            }
+                            ?>
+                        </select>
+                        <button type="button" id="load-pattern-btn" class="button">Load Pattern</button>
+                    </label>
+                </div>
+                
+                <!-- Custom Rules -->
+                <div id="custom-rules-container">
+                    <p>Define your custom linking rules:</p>
+                    <div id="custom-rules-list">
+                        <!-- Rules will be added here -->
+                    </div>
+                    <button type="button" class="button ssp-add-rule">+ Add Rule</button>
+                </div>
+                
+                <!-- Save Pattern -->
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd;">
+                    <label>Save this pattern for reuse: 
+                        <input type="text" id="pattern-name-input" placeholder="Enter pattern name..." class="regular-text" style="margin-left: 10px;">
+                        <button type="button" id="save-pattern-btn" class="button button-secondary">💾 Save Pattern</button>
+                    </label>
+                </div>
+                
+                <p class="description">Create custom linking rules. Use "pillar" for the pillar post, or specific post IDs.</p>
+            </div>
+            
             <div class="ssp-form-section">
                 <h3>Options</h3>
                 <label><input type="checkbox" name="use_ai_anchors" checked> Use AI for anchor text</label><br>
                 <label><input type="checkbox" name="auto_link" checked> Auto-link posts</label><br>
                 <label><input type="checkbox" name="auto_update"> Auto-update on new posts</label><br>
+                <label><input type="checkbox" name="auto_assign_category" id="auto-assign-category"> Auto-assign support posts to category</label><br>
+                <div id="auto-assign-options" style="display: none; margin-left: 20px;">
+                    <label>Category: 
+                        <select name="auto_assign_category_id" class="ssp-select">
+                            <option value="">Select category...</option>
+                            <?php
+                            $categories = get_categories();
+                            foreach ($categories as $category) {
+                                echo '<option value="' . esc_attr($category->term_id) . '">' . esc_html($category->name) . '</option>';
+                            }
+                            ?>
+                        </select>
+                    </label><br>
+                </div>
                 <label><input type="checkbox" name="pillar_to_supports" id="pillar-to-supports"> Pillar links to support posts (Star/Hub & Hub-Chain modes only)</label><br>
                 <div id="pillar-options" style="display: none; margin-left: 20px;">
                     <label>Max pillar links: <input type="number" name="max_pillar_links" value="5" min="1" max="20" style="width: 60px;"></label><br>
@@ -462,6 +516,7 @@ class SSP_Admin_Interface {
      * Render exclusions
      */
     private function render_exclusions() {
+        global $wpdb;
         ?>
         <div class="ssp-exclusions">
             <h3>Exclusions</h3>
@@ -469,18 +524,88 @@ class SSP_Admin_Interface {
             
             <div class="ssp-form-section">
                 <h4>Excluded Posts</h4>
-                <div id="excluded-posts-list">
-                    <!-- Will be populated by JavaScript -->
+                <p class="description">Posts excluded from being linked to in any silo.</p>
+                
+                <div style="margin-bottom: 15px;">
+                    <select id="exclude-post-select" class="ssp-select" style="width: 300px;">
+                        <option value="">Select a post to exclude...</option>
+                        <?php
+                        $all_posts = get_posts(array(
+                            'post_type' => array('post', 'page'),
+                            'post_status' => 'publish',
+                            'numberposts' => -1,
+                            'orderby' => 'title',
+                            'order' => 'ASC'
+                        ));
+                        foreach ($all_posts as $post) {
+                            echo '<option value="' . esc_attr($post->ID) . '">' . esc_html($post->post_title) . '</option>';
+                        }
+                        ?>
+                    </select>
+                    <button id="add-post-exclusion" class="button button-secondary">Add Exclusion</button>
                 </div>
-                <button id="add-post-exclusion" class="button">Add Post Exclusion</button>
+                
+                <div id="excluded-posts-list" class="exclusions-list">
+                    <?php
+                    $excluded_posts = $wpdb->get_results($wpdb->prepare(
+                        "SELECT * FROM {$wpdb->prefix}ssp_excluded_items WHERE item_type = %s ORDER BY created_at DESC",
+                        'post'
+                    ));
+                    
+                    if (!empty($excluded_posts)) {
+                        echo '<table class="wp-list-table widefat">';
+                        echo '<thead><tr><th>Post Title</th><th>Post ID</th><th>Action</th></tr></thead>';
+                        echo '<tbody>';
+                        foreach ($excluded_posts as $item) {
+                            $post = get_post($item->item_value);
+                            if ($post) {
+                                echo '<tr>';
+                                echo '<td>' . esc_html($post->post_title) . '</td>';
+                                echo '<td>#' . esc_html($item->item_value) . '</td>';
+                                echo '<td><button class="button button-small ssp-remove-exclusion" data-type="post" data-value="' . esc_attr($item->item_value) . '">Remove</button></td>';
+                                echo '</tr>';
+                            }
+                        }
+                        echo '</tbody></table>';
+                    } else {
+                        echo '<p class="description">No posts excluded yet.</p>';
+                    }
+                    ?>
+                </div>
             </div>
             
             <div class="ssp-form-section">
                 <h4>Excluded Anchor Text</h4>
-                <div id="excluded-anchors-list">
-                    <!-- Will be populated by JavaScript -->
+                <p class="description">Phrases that will never be used as anchor text.</p>
+                
+                <div style="margin-bottom: 15px;">
+                    <input type="text" id="exclude-anchor-input" placeholder="Enter phrase to exclude (e.g., click here, read more)" class="regular-text" style="width: 300px;">
+                    <button id="add-anchor-exclusion" class="button button-secondary">Add Exclusion</button>
                 </div>
-                <button id="add-anchor-exclusion" class="button">Add Anchor Exclusion</button>
+                
+                <div id="excluded-anchors-list" class="exclusions-list">
+                    <?php
+                    $excluded_anchors = $wpdb->get_results($wpdb->prepare(
+                        "SELECT * FROM {$wpdb->prefix}ssp_excluded_items WHERE item_type = %s ORDER BY created_at DESC",
+                        'anchor'
+                    ));
+                    
+                    if (!empty($excluded_anchors)) {
+                        echo '<table class="wp-list-table widefat">';
+                        echo '<thead><tr><th>Phrase</th><th>Action</th></tr></thead>';
+                        echo '<tbody>';
+                        foreach ($excluded_anchors as $item) {
+                            echo '<tr>';
+                            echo '<td>"' . esc_html($item->item_value) . '"</td>';
+                            echo '<td><button class="button button-small ssp-remove-exclusion" data-type="anchor" data-value="' . esc_attr($item->item_value) . '">Remove</button></td>';
+                            echo '</tr>';
+                        }
+                        echo '</tbody></table>';
+                    } else {
+                        echo '<p class="description">No anchor text excluded yet. Common exclusions: "click here", "read more", "contact"</p>';
+                    }
+                    ?>
+                </div>
             </div>
         </div>
         <?php

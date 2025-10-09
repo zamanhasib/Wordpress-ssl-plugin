@@ -96,6 +96,94 @@ class SSP_Silo_Manager {
     }
     
     /**
+     * Create silo with user-approved AI recommendations
+     */
+    public function create_ai_silo_with_approved_posts($pillar_post_ids, $approved_posts, $settings = array()) {
+        $results = array();
+        
+        foreach ($pillar_post_ids as $pillar_post_id) {
+            // Skip if no approved posts for this pillar
+            if (!isset($approved_posts[$pillar_post_id]) || empty($approved_posts[$pillar_post_id])) {
+                continue;
+            }
+            
+            $pillar_post = get_post($pillar_post_id);
+            if (!$pillar_post) {
+                $results[] = array(
+                    'pillar_post_id' => $pillar_post_id,
+                    'status' => 'error',
+                    'message' => 'Pillar post not found'
+                );
+                continue;
+            }
+            
+            // Create silo
+            $silo_data = array(
+                'name' => $pillar_post->post_title . ' - AI Silo',
+                'pillar_post_id' => $pillar_post_id,
+                'linking_mode' => $settings['linking_mode'] ?? 'linear',
+                'setup_method' => 'ai_recommended',
+                'settings' => $settings
+            );
+            
+            $silo_id = SSP_Database::create_silo($silo_data);
+            
+            if ($silo_id) {
+                // Add only approved posts to silo
+                $post_ids = array_map('intval', $approved_posts[$pillar_post_id]);
+                $posts_added = SSP_Database::add_posts_to_silo($silo_id, $post_ids);
+                
+                $results[] = array(
+                    'silo_id' => $silo_id,
+                    'pillar_post_id' => $pillar_post_id,
+                    'support_posts' => $post_ids,
+                    'posts_added' => $posts_added,
+                    'status' => 'success'
+                );
+                
+                // Auto-assign category if enabled
+                if (isset($settings['auto_assign_category']) && $settings['auto_assign_category']) {
+                    $category_id = intval($settings['auto_assign_category_id'] ?? 0);
+                    if ($category_id > 0) {
+                        $this->assign_posts_to_category($post_ids, $category_id);
+                    }
+                }
+                
+                // Auto-link if enabled
+                if (isset($settings['auto_link']) && $settings['auto_link']) {
+                    $link_engine = SSP_Link_Engine::get_instance();
+                    $link_engine->generate_links_for_silo($silo_id);
+                }
+            } else {
+                $results[] = array(
+                    'pillar_post_id' => $pillar_post_id,
+                    'status' => 'error',
+                    'message' => 'Failed to create silo'
+                );
+            }
+        }
+        
+        return $results;
+    }
+    
+    /**
+     * Assign posts to a category
+     */
+    private function assign_posts_to_category($post_ids, $category_id) {
+        foreach ($post_ids as $post_id) {
+            // Get current categories
+            $current_cats = wp_get_post_categories($post_id);
+            
+            // Add new category if not already assigned
+            if (!in_array($category_id, $current_cats)) {
+                $current_cats[] = $category_id;
+                wp_set_post_categories($post_id, $current_cats);
+                error_log("SSP: Assigned post {$post_id} to category {$category_id}");
+            }
+        }
+    }
+    
+    /**
      * Create silo using category-based selection
      */
     public function create_category_silo($pillar_post_ids, $category_id, $settings = array()) {

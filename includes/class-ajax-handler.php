@@ -38,6 +38,11 @@ class SSP_Ajax_Handler {
         add_action('wp_ajax_nopriv_ssp_get_related_content', array($this, 'get_related_content'));
         add_action('wp_ajax_ssp_get_silo_details', array($this, 'get_silo_details'));
         add_action('wp_ajax_ssp_recreate_tables', array($this, 'recreate_tables'));
+        add_action('wp_ajax_ssp_get_ai_recommendations', array($this, 'get_ai_recommendations'));
+        add_action('wp_ajax_ssp_get_rewrite_suggestion', array($this, 'get_rewrite_suggestion'));
+        add_action('wp_ajax_ssp_save_pattern', array($this, 'save_pattern'));
+        add_action('wp_ajax_ssp_load_pattern', array($this, 'load_pattern'));
+        add_action('wp_ajax_ssp_delete_pattern', array($this, 'delete_pattern'));
     }
     
     /**
@@ -103,7 +108,9 @@ class SSP_Ajax_Handler {
             'pillar_to_supports' => isset($_POST['pillar_to_supports']),
             'max_pillar_links' => intval($_POST['max_pillar_links'] ?? 5),
             'max_contextual_links' => intval($_POST['max_contextual_links'] ?? 3),
-            'placement_type' => get_option('ssp_settings')['link_placement'] ?? 'inline'
+            'placement_type' => get_option('ssp_settings')['link_placement'] ?? 'inline',
+            'auto_assign_category' => isset($_POST['auto_assign_category']),
+            'auto_assign_category_id' => intval($_POST['auto_assign_category_id'] ?? 0)
         );
         
         // Handle custom pattern for custom linking mode
@@ -130,7 +137,17 @@ class SSP_Ajax_Handler {
         try {
             switch ($setup_method) {
                 case 'ai_recommended':
-                    $results = $silo_manager->create_ai_silo($pillar_post_ids, $settings);
+                    // Check if we have approved recommendations from modal
+                    if (isset($_POST['approved_recommendations'])) {
+                        $approved_recs = json_decode(stripslashes($_POST['approved_recommendations']), true);
+                        if (is_array($approved_recs)) {
+                            $results = $silo_manager->create_ai_silo_with_approved_posts($pillar_post_ids, $approved_recs, $settings);
+                        } else {
+                            $results = $silo_manager->create_ai_silo($pillar_post_ids, $settings);
+                        }
+                    } else {
+                        $results = $silo_manager->create_ai_silo($pillar_post_ids, $settings);
+                    }
                     break;
                     
                 case 'category_based':
@@ -591,6 +608,213 @@ class SSP_Ajax_Handler {
         } catch (Exception $e) {
             wp_send_json_error('Failed to recreate tables: ' . esc_html($e->getMessage()));
         }
+    }
+    
+    /**
+     * Get AI recommendations for pillar posts (without creating silo)
+     */
+    public function get_ai_recommendations() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        $pillar_post_ids = array();
+        if (isset($_POST['pillar_post_ids']) && is_array($_POST['pillar_post_ids'])) {
+            $pillar_post_ids = array_map('intval', $_POST['pillar_post_ids']);
+        } else {
+            // Handle indexed array format
+            foreach ($_POST as $key => $value) {
+                if (strpos($key, 'pillar_post_ids[') === 0) {
+                    $pillar_post_ids[] = intval($value);
+                }
+            }
+        }
+        
+        if (empty($pillar_post_ids)) {
+            wp_send_json_error('No pillar posts provided');
+            exit;
+        }
+        
+        $ai_integration = SSP_AI_Integration::get_instance();
+        $all_recommendations = array();
+        
+        foreach ($pillar_post_ids as $pillar_post_id) {
+            $pillar_post = get_post($pillar_post_id);
+            if (!$pillar_post) {
+                continue;
+            }
+            
+            $recommendations = $ai_integration->get_relevant_posts($pillar_post_id, 20);
+            
+            if ($recommendations) {
+                $all_recommendations[] = array(
+                    'pillar_id' => $pillar_post_id,
+                    'pillar_title' => $pillar_post->post_title,
+                    'recommendations' => array_map(function($post) {
+                        return array(
+                            'id' => $post->ID,
+                            'title' => $post->post_title,
+                            'relevance' => isset($post->relevance_score) ? $post->relevance_score : 0.8,
+                            'excerpt' => wp_trim_words(get_the_excerpt($post->ID), 20)
+                        );
+                    }, $recommendations)
+                );
+            }
+        }
+        
+        if (!empty($all_recommendations)) {
+            wp_send_json_success(array(
+                'recommendations' => $all_recommendations
+            ));
+        } else {
+            wp_send_json_error('No recommendations found. Check if AI is configured correctly.');
+        }
+    }
+    
+    /**
+     * Get AI rewrite suggestion for content
+     */
+    public function get_rewrite_suggestion() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        $original_text = sanitize_textarea_field($_POST['original_text'] ?? '');
+        $target_post_id = intval($_POST['target_post_id'] ?? 0);
+        $anchor_text = sanitize_text_field($_POST['anchor_text'] ?? '');
+        
+        if (empty($original_text) || empty($target_post_id)) {
+            wp_send_json_error('Missing required parameters');
+            exit;
+        }
+        
+        $ai_integration = SSP_AI_Integration::get_instance();
+        $rewrite = $ai_integration->get_rewrite_suggestions($original_text, $target_post_id, $anchor_text);
+        
+        if ($rewrite) {
+            wp_send_json_success(array(
+                'rewrite' => $rewrite,
+                'original' => $original_text
+            ));
+        } else {
+            wp_send_json_error('Failed to generate rewrite. Check AI configuration.');
+        }
+    }
+    
+    /**
+     * Save custom linking pattern
+     */
+    public function save_pattern() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        $pattern_name = sanitize_text_field($_POST['pattern_name'] ?? '');
+        $pattern_rules = $_POST['pattern_rules'] ?? '';
+        
+        if (empty($pattern_name)) {
+            wp_send_json_error('Pattern name is required');
+            exit;
+        }
+        
+        // Decode and validate pattern rules
+        $rules = json_decode(stripslashes($pattern_rules), true);
+        if (!is_array($rules)) {
+            wp_send_json_error('Invalid pattern rules');
+            exit;
+        }
+        
+        // Get existing patterns
+        $saved_patterns = get_option('ssp_saved_patterns', array());
+        
+        // Add or update pattern
+        $saved_patterns[$pattern_name] = array(
+            'rules' => $rules,
+            'created_at' => current_time('mysql'),
+            'updated_at' => current_time('mysql')
+        );
+        
+        // Save to database
+        update_option('ssp_saved_patterns', $saved_patterns);
+        
+        wp_send_json_success(array(
+            'message' => 'Pattern saved successfully',
+            'pattern_name' => $pattern_name
+        ));
+    }
+    
+    /**
+     * Load custom linking pattern
+     */
+    public function load_pattern() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        $pattern_name = sanitize_text_field($_POST['pattern_name'] ?? '');
+        
+        if (empty($pattern_name)) {
+            wp_send_json_error('Pattern name is required');
+            exit;
+        }
+        
+        // Get saved patterns
+        $saved_patterns = get_option('ssp_saved_patterns', array());
+        
+        if (!isset($saved_patterns[$pattern_name])) {
+            wp_send_json_error('Pattern not found');
+            exit;
+        }
+        
+        wp_send_json_success(array(
+            'pattern' => $saved_patterns[$pattern_name],
+            'pattern_name' => $pattern_name
+        ));
+    }
+    
+    /**
+     * Delete custom linking pattern
+     */
+    public function delete_pattern() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        $pattern_name = sanitize_text_field($_POST['pattern_name'] ?? '');
+        
+        if (empty($pattern_name)) {
+            wp_send_json_error('Pattern name is required');
+            exit;
+        }
+        
+        // Get saved patterns
+        $saved_patterns = get_option('ssp_saved_patterns', array());
+        
+        if (!isset($saved_patterns[$pattern_name])) {
+            wp_send_json_error('Pattern not found');
+            exit;
+        }
+        
+        // Remove pattern
+        unset($saved_patterns[$pattern_name]);
+        update_option('ssp_saved_patterns', $saved_patterns);
+        
+        wp_send_json_success('Pattern deleted successfully');
     }
     
     /**

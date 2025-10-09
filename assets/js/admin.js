@@ -72,9 +72,25 @@ jQuery(document).ready(function($) {
             }
         });
         
+        // Auto-assign category checkbox handler
+        $('#auto-assign-category').on('change', function() {
+            if ($(this).is(':checked')) {
+                $('#auto-assign-options').show();
+            } else {
+                $('#auto-assign-options').hide();
+            }
+        });
+        
         // Custom pattern rules
         $(document).on('click', '.ssp-add-rule', handleAddCustomRule);
         $(document).on('click', '.ssp-remove-rule', handleRemoveCustomRule);
+        $('#save-pattern-btn').on('click', handleSavePattern);
+        $('#load-pattern-btn').on('click', handleLoadPattern);
+        
+        // Initialize custom pattern with one default rule
+        if ($('#custom-rules-list').length && $('#custom-rules-list .custom-rule-row').length === 0) {
+            addCustomRule('', '');
+        }
         
         // Silo selector handlers
         $('#silo-select, #preview-silo-select').on('change', function() {
@@ -148,6 +164,8 @@ jQuery(document).ready(function($) {
             use_ai_anchors: $form.find('input[name="use_ai_anchors"]').is(':checked'),
             auto_link: $form.find('input[name="auto_link"]').is(':checked'),
             auto_update: $form.find('input[name="auto_update"]').is(':checked'),
+            auto_assign_category: $form.find('input[name="auto_assign_category"]').is(':checked'),
+            auto_assign_category_id: $form.find('select[name="auto_assign_category_id"]').val(),
             pillar_to_supports: $form.find('input[name="pillar_to_supports"]').is(':checked'),
             max_pillar_links: $form.find('input[name="max_pillar_links"]').val(),
             max_contextual_links: $form.find('input[name="max_contextual_links"]').val()
@@ -160,6 +178,14 @@ jQuery(document).ready(function($) {
         
         // Add method-specific data
         var setupMethod = formData.setup_method;
+        
+        // For AI-Recommended, show recommendations first
+        if (setupMethod === 'ai_recommended') {
+            $submitBtn.prop('disabled', false).text(originalText);
+            showAIRecommendations(pillarPosts, formData, $form);
+            return;
+        }
+        
         if (setupMethod === 'category_based') {
             formData.category_id = $form.find('select[name="category_id"]').val();
         } else if (setupMethod === 'manual') {
@@ -171,6 +197,26 @@ jQuery(document).ready(function($) {
             supportPosts.forEach(function(postId, index) {
                 formData['support_posts[' + index + ']'] = postId;
             });
+        }
+        
+        // Add custom pattern rules if custom mode is selected
+        var linkingMode = $form.find('input[name="linking_mode"]:checked').val();
+        if (linkingMode === 'custom') {
+            var customRules = [];
+            $('#custom-rules-list .custom-rule-row').each(function() {
+                var source = $(this).find('.rule-source').val();
+                var target = $(this).find('.rule-target').val();
+                
+                if (source && target) {
+                    customRules.push({
+                        source: source,
+                        target: target
+                    });
+                }
+            });
+            
+            formData.custom_source = customRules.map(function(r) { return r.source; });
+            formData.custom_target = customRules.map(function(r) { return r.target; });
         }
         
         $.ajax({
@@ -628,24 +674,125 @@ jQuery(document).ready(function($) {
     
     function handleAddCustomRule(e) {
         e.preventDefault();
-        
-        var $rulesContainer = $('#custom-pattern-rules');
-        var $firstRule = $rulesContainer.find('.ssp-pattern-rule').first();
-        var $newRule = $firstRule.clone();
-        
-        $newRule.find('select').val('');
-        $rulesContainer.append($newRule);
+        addCustomRule('', '');
     }
     
     function handleRemoveCustomRule(e) {
         e.preventDefault();
         
-        var $rule = $(this).closest('.ssp-pattern-rule');
-        if ($('#custom-pattern-rules .ssp-pattern-rule').length > 1) {
+        var $rule = $(this).closest('.custom-rule-row');
+        if ($('#custom-rules-list .custom-rule-row').length > 1) {
             $rule.remove();
         } else {
             showNotice('You must have at least one rule', 'error');
         }
+    }
+    
+    function handleSavePattern(e) {
+        e.preventDefault();
+        
+        var patternName = $('#pattern-name-input').val().trim();
+        
+        if (!patternName) {
+            showNotice('Please enter a pattern name', 'error');
+            return;
+        }
+        
+        // Collect all custom rules
+        var rules = [];
+        $('#custom-rules-list .custom-rule-row').each(function() {
+            var source = $(this).find('.rule-source').val();
+            var target = $(this).find('.rule-target').val();
+            
+            if (source && target) {
+                rules.push({
+                    source: source,
+                    target: target
+                });
+            }
+        });
+        
+        if (rules.length === 0) {
+            showNotice('Please add at least one rule before saving', 'error');
+            return;
+        }
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_save_pattern',
+                nonce: ssp_ajax.nonce,
+                pattern_name: patternName,
+                pattern_rules: JSON.stringify(rules)
+            },
+            success: function(response) {
+                if (response.success) {
+                    showNotice('Pattern "' + patternName + '" saved successfully!', 'success');
+                    $('#pattern-name-input').val('');
+                    // Reload page to update dropdown
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1500);
+                } else {
+                    showNotice(response.data || 'Failed to save pattern', 'error');
+                }
+            },
+            error: function() {
+                showNotice('Error saving pattern', 'error');
+            }
+        });
+    }
+    
+    function handleLoadPattern(e) {
+        e.preventDefault();
+        
+        var patternName = $('#load-saved-pattern').val();
+        
+        if (!patternName) {
+            showNotice('Please select a pattern to load', 'error');
+            return;
+        }
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_load_pattern',
+                nonce: ssp_ajax.nonce,
+                pattern_name: patternName
+            },
+            success: function(response) {
+                if (response.success && response.data.pattern) {
+                    // Clear existing rules
+                    $('#custom-rules-list').empty();
+                    
+                    // Add loaded rules
+                    var rules = response.data.pattern.rules;
+                    rules.forEach(function(rule) {
+                        addCustomRule(rule.source, rule.target);
+                    });
+                    
+                    showNotice('Pattern "' + patternName + '" loaded successfully!', 'success');
+                } else {
+                    showNotice(response.data || 'Failed to load pattern', 'error');
+                }
+            },
+            error: function() {
+                showNotice('Error loading pattern', 'error');
+            }
+        });
+    }
+    
+    function addCustomRule(source, target) {
+        var ruleHtml = '<div class="custom-rule-row" style="margin-bottom: 10px;">';
+        ruleHtml += '<input type="text" class="rule-source" placeholder="Source (e.g., pillar, 123)" value="' + (source || '') + '" style="width: 150px; margin-right: 10px;">';
+        ruleHtml += ' → ';
+        ruleHtml += '<input type="text" class="rule-target" placeholder="Target (e.g., pillar, 456)" value="' + (target || '') + '" style="width: 150px; margin-right: 10px;">';
+        ruleHtml += '<button type="button" class="button ssp-remove-rule">Remove</button>';
+        ruleHtml += '</div>';
+        
+        $('#custom-rules-list').append(ruleHtml);
     }
     
     function handleRecreateTables(e) {
@@ -719,5 +866,176 @@ jQuery(document).ready(function($) {
         setTimeout(function() {
             $notice.fadeOut();
         }, 5000);
+    }
+    
+    /**
+     * Show AI recommendations modal for user approval
+     */
+    function showAIRecommendations(pillarPosts, formData, $form) {
+        // Show loading
+        showNotice('Getting AI recommendations...', 'info');
+        
+        // Prepare data for AI recommendation request
+        var recData = {
+            action: 'ssp_get_ai_recommendations',
+            nonce: ssp_ajax.nonce
+        };
+        
+        pillarPosts.forEach(function(postId, index) {
+            recData['pillar_post_ids[' + index + ']'] = postId;
+        });
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: recData,
+            success: function(response) {
+                if (response.success && response.data.recommendations) {
+                    displayAIRecommendationsModal(response.data.recommendations, formData, $form);
+                } else {
+                    showNotice(response.data || 'Failed to get AI recommendations', 'error');
+                }
+            },
+            error: function() {
+                showNotice('Error getting AI recommendations', 'error');
+            }
+        });
+    }
+    
+    /**
+     * Display AI recommendations modal with approve/reject options
+     */
+    function displayAIRecommendationsModal(recommendations, formData, $form) {
+        // Remove existing modal if any
+        $('#ssp-ai-modal').remove();
+        
+        var modalHtml = '<div id="ssp-ai-modal" class="ssp-modal-overlay">';
+        modalHtml += '<div class="ssp-modal-content">';
+        modalHtml += '<span class="ssp-modal-close">&times;</span>';
+        modalHtml += '<h2>🤖 AI Recommendations - Review & Approve</h2>';
+        modalHtml += '<p>Select which posts to include in your silo(s):</p>';
+        
+        recommendations.forEach(function(rec, index) {
+            modalHtml += '<div class="ssp-recommendation-group">';
+            modalHtml += '<h3>📄 Pillar: ' + rec.pillar_title + '</h3>';
+            modalHtml += '<div class="ssp-recommendations-list">';
+            
+            if (rec.recommendations && rec.recommendations.length > 0) {
+                modalHtml += '<table class="wp-list-table widefat">';
+                modalHtml += '<thead><tr>';
+                modalHtml += '<th style="width: 40px;"><input type="checkbox" class="select-all-recs" data-pillar="' + rec.pillar_id + '" checked></th>';
+                modalHtml += '<th>Post Title</th>';
+                modalHtml += '<th style="width: 100px;">Relevance</th>';
+                modalHtml += '<th style="width: 40%;">Excerpt</th>';
+                modalHtml += '</tr></thead><tbody>';
+                
+                rec.recommendations.forEach(function(post) {
+                    var relevancePercent = Math.round(post.relevance * 100);
+                    var relevanceClass = relevancePercent >= 80 ? 'high' : (relevancePercent >= 60 ? 'medium' : 'low');
+                    
+                    modalHtml += '<tr>';
+                    modalHtml += '<td><input type="checkbox" class="ai-rec-checkbox" data-pillar="' + rec.pillar_id + '" data-post="' + post.id + '" checked></td>';
+                    modalHtml += '<td><strong>' + post.title + '</strong></td>';
+                    modalHtml += '<td><span class="relevance-badge relevance-' + relevanceClass + '">' + relevancePercent + '%</span></td>';
+                    modalHtml += '<td style="font-size: 12px; color: #666;">' + post.excerpt + '</td>';
+                    modalHtml += '</tr>';
+                });
+                
+                modalHtml += '</tbody></table>';
+            } else {
+                modalHtml += '<p>No recommendations found for this pillar.</p>';
+            }
+            
+            modalHtml += '</div></div>';
+        });
+        
+        modalHtml += '<div class="ssp-modal-actions">';
+        modalHtml += '<button id="approve-ai-recommendations" class="button button-primary button-large">✓ Approve & Create Silo</button>';
+        modalHtml += '<button id="cancel-ai-recommendations" class="button button-large">Cancel</button>';
+        modalHtml += '</div>';
+        modalHtml += '</div></div>';
+        
+        $('body').append(modalHtml);
+        
+        // Handle select all checkbox
+        $('.select-all-recs').on('change', function() {
+            var pillarId = $(this).data('pillar');
+            var isChecked = $(this).is(':checked');
+            $('.ai-rec-checkbox[data-pillar="' + pillarId + '"]').prop('checked', isChecked);
+        });
+        
+        // Handle approve button
+        $('#approve-ai-recommendations').on('click', function() {
+            createSiloWithApprovedRecommendations(recommendations, formData, $form);
+        });
+        
+        // Handle cancel button
+        $('#cancel-ai-recommendations, .ssp-modal-close').on('click', function() {
+            $('#ssp-ai-modal').remove();
+        });
+        
+        // Close on background click
+        $('#ssp-ai-modal').on('click', function(e) {
+            if ($(e.target).is('#ssp-ai-modal')) {
+                $('#ssp-ai-modal').remove();
+            }
+        });
+    }
+    
+    /**
+     * Create silo with user-approved AI recommendations
+     */
+    function createSiloWithApprovedRecommendations(recommendations, formData, $form) {
+        var approvedPosts = {};
+        
+        // Collect approved posts for each pillar
+        $('.ai-rec-checkbox:checked').each(function() {
+            var pillarId = $(this).data('pillar');
+            var postId = $(this).data('post');
+            
+            if (!approvedPosts[pillarId]) {
+                approvedPosts[pillarId] = [];
+            }
+            approvedPosts[pillarId].push(postId);
+        });
+        
+        // Check if any posts were approved
+        if (Object.keys(approvedPosts).length === 0) {
+            showNotice('Please select at least one post to include', 'error');
+            return;
+        }
+        
+        // Close modal
+        $('#ssp-ai-modal').remove();
+        
+        // Update form data with approved posts
+        formData.approved_recommendations = JSON.stringify(approvedPosts);
+        
+        // Show processing
+        var $submitBtn = $form.find('button[type="submit"]');
+        $submitBtn.prop('disabled', true).text(ssp_ajax.strings.processing);
+        
+        // Submit to create silo
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: formData,
+            success: function(response) {
+                $submitBtn.prop('disabled', false).text('Create Silo');
+                
+                if (response.success) {
+                    showNotice('Silo created successfully!', 'success');
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1500);
+                } else {
+                    showNotice(response.data || 'Failed to create silo', 'error');
+                }
+            },
+            error: function() {
+                $submitBtn.prop('disabled', false).text('Create Silo');
+                showNotice(ssp_ajax.strings.error, 'error');
+            }
+        });
     }
 });

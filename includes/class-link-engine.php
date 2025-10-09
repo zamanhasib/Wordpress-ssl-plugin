@@ -924,6 +924,31 @@ class SSP_Link_Engine {
     }
     
     /**
+     * Get all anchor text variations (for preview)
+     */
+    public function get_anchor_variations($source_post_id, $target_post_id, $settings) {
+        $variations = array();
+        
+        // Try AI suggestions first if available
+        if (isset($settings['use_ai_anchors']) && $settings['use_ai_anchors']) {
+            $ai_suggestions = $this->ai_integration->get_anchor_suggestions($source_post_id, $target_post_id);
+            if (!empty($ai_suggestions) && is_array($ai_suggestions)) {
+                $variations = $ai_suggestions;
+            }
+        }
+        
+        // If no AI suggestions or not using AI, generate smart variations
+        if (empty($variations)) {
+            $smart_anchor = $this->generate_smart_anchor_text($source_post_id, $target_post_id, $settings);
+            if ($smart_anchor) {
+                $variations = array($smart_anchor);
+            }
+        }
+        
+        return $variations;
+    }
+    
+    /**
      * Generate smart anchor text using multiple strategies
      */
     private function generate_smart_anchor_text($source_post_id, $target_post_id, $settings) {
@@ -1468,11 +1493,14 @@ class SSP_Link_Engine {
         
         if ($next_post->ID != $post->ID) {
             $anchor_text = $this->get_anchor_text($post->ID, $next_post->ID, $settings);
+            $anchor_variations = $this->get_anchor_variations($post->ID, $next_post->ID, $settings);
+            
             if ($anchor_text) {
                 $previews[] = array(
                     'target_post_id' => $next_post->ID,
                     'target_title' => $next_post->post_title,
                     'anchor_text' => $anchor_text,
+                    'anchor_variations' => $anchor_variations,
                     'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
                 );
             }
@@ -1509,11 +1537,14 @@ class SSP_Link_Engine {
         if ($current_index < count($silo_posts) - 1) {
             $next_post = get_post($silo_posts[$current_index + 1]->post_id);
             $anchor_text = $this->get_anchor_text($post->ID, $next_post->ID, $settings);
+            $anchor_variations = $this->get_anchor_variations($post->ID, $next_post->ID, $settings);
+            
             if ($anchor_text) {
                 $previews[] = array(
                     'target_post_id' => $next_post->ID,
                     'target_title' => $next_post->post_title,
                     'anchor_text' => $anchor_text,
+                    'anchor_variations' => $anchor_variations,
                     'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
                 );
             }
@@ -1523,11 +1554,14 @@ class SSP_Link_Engine {
         if ($current_index > 0) {
             $prev_post = get_post($silo_posts[$current_index - 1]->post_id);
             $anchor_text = $this->get_anchor_text($post->ID, $prev_post->ID, $settings);
+            $anchor_variations = $this->get_anchor_variations($post->ID, $prev_post->ID, $settings);
+            
             if ($anchor_text) {
                 $previews[] = array(
                     'target_post_id' => $prev_post->ID,
                     'target_title' => $prev_post->post_title,
                     'anchor_text' => $anchor_text,
+                    'anchor_variations' => $anchor_variations,
                     'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
                 );
             }
@@ -1551,11 +1585,14 @@ class SSP_Link_Engine {
             }
             
             $anchor_text = $this->get_anchor_text($post->ID, $target_post->ID, $settings);
+            $anchor_variations = $this->get_anchor_variations($post->ID, $target_post->ID, $settings);
+            
             if ($anchor_text) {
                 $previews[] = array(
                     'target_post_id' => $target_post->ID,
                     'target_title' => $target_post->post_title,
                     'anchor_text' => $anchor_text,
+                    'anchor_variations' => $anchor_variations,
                     'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
                 );
             }
@@ -1593,11 +1630,14 @@ class SSP_Link_Engine {
             }
             
             $anchor_text = $this->get_anchor_text($post->ID, $target_post->ID, $settings);
+            $anchor_variations = $this->get_anchor_variations($post->ID, $target_post->ID, $settings);
+            
             if ($anchor_text) {
                 $previews[] = array(
                     'target_post_id' => $target_post->ID,
                     'target_title' => $target_post->post_title,
                     'anchor_text' => $anchor_text,
+                    'anchor_variations' => $anchor_variations,
                     'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
                 );
             }
