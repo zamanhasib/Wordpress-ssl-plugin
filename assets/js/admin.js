@@ -62,10 +62,9 @@ jQuery(document).ready(function($) {
             }
         });
         
-        // Pillar to supports checkbox handler
+        // Pillar to supports checkbox handler (now works for ALL modes)
         $('#pillar-to-supports').on('change', function() {
-            var linkingMode = $('input[name="linking_mode"]:checked').val();
-            if ($(this).is(':checked') && (linkingMode === 'star_hub' || linkingMode === 'hub_chain')) {
+            if ($(this).is(':checked')) {
                 $('#pillar-options').show();
             } else {
                 $('#pillar-options').hide();
@@ -92,6 +91,34 @@ jQuery(document).ready(function($) {
             addCustomRule('', '');
         }
         
+        // AI Provider selector - switch model options
+        $('#ai-provider-select').on('change', function() {
+            var provider = $(this).val();
+            if (provider === 'openrouter') {
+                $('.openai-models').hide();
+                $('.openrouter-models').show();
+                // Select first OpenRouter model
+                $('#ai-model-select').val('anthropic/claude-3-sonnet');
+            } else {
+                $('.openai-models').show();
+                $('.openrouter-models').hide();
+                // Select default OpenAI model
+                $('#ai-model-select').val('gpt-3.5-turbo');
+            }
+        });
+        
+        // Initialize model dropdown based on current provider
+        if ($('#ai-provider-select').length) {
+            var currentProvider = $('#ai-provider-select').val();
+            if (currentProvider === 'openrouter') {
+                $('.openai-models').hide();
+                $('.openrouter-models').show();
+            } else {
+                $('.openai-models').show();
+                $('.openrouter-models').hide();
+            }
+        }
+        
         // Silo selector handlers
         $('#silo-select, #preview-silo-select').on('change', function() {
             var hasSelection = $(this).val() !== '';
@@ -102,6 +129,7 @@ jQuery(document).ready(function($) {
         $('#ssp-create-silo-form').on('submit', handleCreateSilo);
         
         // Silo management buttons
+        $(document).on('click', '.ssp-view-silo', handleViewSilo);
         $(document).on('click', '.ssp-delete-silo', handleDeleteSilo);
         $(document).on('click', '.ssp-generate-links', handleGenerateLinks);
         $(document).on('click', '.ssp-preview-silo', handlePreviewSilo);
@@ -125,7 +153,23 @@ jQuery(document).ready(function($) {
         // Troubleshoot
         $('#recreate-tables').on('click', handleRecreateTables);
         $('#check-tables').on('click', handleCheckTables);
-        $('#check-logs').on('click', handleCheckLogs);
+        $('#view-debug-report').on('click', handleViewDebugReport);
+        $('#download-debug-report').on('click', handleDownloadDebugReport);
+        $('#clear-debug-logs').on('click', handleClearDebugLogs);
+        
+        // Anchor Report handlers
+        $('#load-anchor-report, #refresh-anchor-report').on('click', handleLoadAnchorReport);
+        $('#anchor-silo-filter, #anchor-status-filter').on('change', handleLoadAnchorReport);
+        $('#anchor-settings-form').on('submit', handleSaveAnchorSettings);
+        $('#export-anchor-report').on('click', handleExportAnchorReport);
+        $(document).on('click', '.view-anchor-details', handleViewAnchorDetails);
+        
+        // Anchor Details Modal close
+        $(document).on('click', '#anchor-details-modal .ssp-modal-close, #anchor-details-modal', function(e) {
+            if ($(e.target).is('#anchor-details-modal') || $(e.target).is('.ssp-modal-close')) {
+                $('#anchor-details-modal').fadeOut();
+            }
+        });
     }
     
     function handleCreateSilo(e) {
@@ -166,6 +210,8 @@ jQuery(document).ready(function($) {
             auto_update: $form.find('input[name="auto_update"]').is(':checked'),
             auto_assign_category: $form.find('input[name="auto_assign_category"]').is(':checked'),
             auto_assign_category_id: $form.find('select[name="auto_assign_category_id"]').val(),
+            link_placement: $form.find('input[name="link_placement"]:checked').val(),
+            supports_to_pillar: $form.find('input[name="supports_to_pillar"]').is(':checked'),
             pillar_to_supports: $form.find('input[name="pillar_to_supports"]').is(':checked'),
             max_pillar_links: $form.find('input[name="max_pillar_links"]').val(),
             max_contextual_links: $form.find('input[name="max_contextual_links"]').val()
@@ -225,19 +271,21 @@ jQuery(document).ready(function($) {
             data: formData,
             success: function(response) {
                 if (response.success) {
-                    var message = 'Silo created successfully!';
-                    if (response.data && response.data.silo_id) {
-                        message += '\n\nSilo ID: ' + response.data.silo_id;
-                        message += '\nPillar Post ID: ' + (response.data.pillar_post_id || 'N/A');
-                        message += '\nSupport Posts: ' + (response.data.support_posts_count || 0);
+                    var message = response.data.message || 'Silo created successfully!';
+                    
+                    // Show additional details if available
+                    if (response.data.silos_created) {
+                        message += ' (' + response.data.silos_created + ' silo(s))';
                     }
+                    
                     showNotice(message, 'success');
                     $form[0].reset();
                     $('.ssp-method-specific').hide();
-                    // Refresh page to show new silo
+                    
+                    // Refresh page to show new silo(s)
                     setTimeout(function() {
                         location.reload();
-                    }, 2000);
+                    }, 1500);
                 } else {
                     showNotice(response.data || 'Failed to create silo', 'error');
                 }
@@ -282,16 +330,18 @@ jQuery(document).ready(function($) {
             },
             success: function(response) {
                 if (response.success) {
-                    showNotice('Silo deleted successfully!', 'success');
-                    $button.closest('.ssp-silo-card').fadeOut();
+                    showNotice('Silo deleted successfully! Refreshing page...', 'success');
+                    // Refresh page after short delay to show message
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1000);
                 } else {
                     showNotice(response.data || 'Failed to delete silo', 'error');
+                    $button.prop('disabled', false).text('Delete');
                 }
             },
             error: function() {
                 showNotice(ssp_ajax.strings.error, 'error');
-            },
-            complete: function() {
                 $button.prop('disabled', false).text('Delete');
             }
         });
@@ -338,6 +388,81 @@ jQuery(document).ready(function($) {
         });
     }
     
+    function handleViewSilo(e) {
+        e.preventDefault();
+        
+        var siloId = $(this).data('silo-id');
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_get_silo_details',
+                nonce: ssp_ajax.nonce,
+                silo_id: siloId
+            },
+            success: function(response) {
+                if (response.success && response.data) {
+                    displaySiloDetailsModal(response.data);
+                } else {
+                    showNotice(response.data || 'Failed to load silo details', 'error');
+                }
+            },
+            error: function() {
+                showNotice('Error loading silo details', 'error');
+            }
+        });
+    }
+    
+    function displaySiloDetailsModal(siloData) {
+        // Remove existing modal if any
+        $('#ssp-silo-details-modal').remove();
+        
+        var modalHtml = '<div id="ssp-silo-details-modal" class="ssp-modal-overlay">';
+        modalHtml += '<div class="ssp-modal-content">';
+        modalHtml += '<span class="ssp-modal-close">&times;</span>';
+        modalHtml += '<h2>📊 Silo Details</h2>';
+        
+        modalHtml += '<div class="silo-info">';
+        modalHtml += '<p><strong>Silo Name:</strong> ' + siloData.name + '</p>';
+        modalHtml += '<p><strong>Pillar Post:</strong> ' + siloData.pillar_title + ' (ID: ' + siloData.pillar_id + ')</p>';
+        modalHtml += '<p><strong>Setup Method:</strong> ' + siloData.setup_method + '</p>';
+        modalHtml += '<p><strong>Linking Mode:</strong> ' + siloData.linking_mode + '</p>';
+        modalHtml += '<p><strong>Total Support Posts:</strong> ' + siloData.posts.length + '</p>';
+        modalHtml += '<p><strong>Total Links:</strong> ' + siloData.total_links + '</p>';
+        modalHtml += '<p><strong>Created:</strong> ' + siloData.created_at + '</p>';
+        modalHtml += '</div>';
+        
+        modalHtml += '<h3>Support Posts in This Silo:</h3>';
+        modalHtml += '<table class="wp-list-table widefat">';
+        modalHtml += '<thead><tr><th>Post Title</th><th>Post ID</th><th>Links</th></tr></thead>';
+        modalHtml += '<tbody>';
+        
+        siloData.posts.forEach(function(post) {
+            modalHtml += '<tr>';
+            modalHtml += '<td>' + post.title + '</td>';
+            modalHtml += '<td>#' + post.id + '</td>';
+            modalHtml += '<td>' + post.link_count + '</td>';
+            modalHtml += '</tr>';
+        });
+        
+        modalHtml += '</tbody></table>';
+        
+        modalHtml += '<div class="ssp-modal-actions">';
+        modalHtml += '<button class="button button-primary" onclick="$(\'#ssp-silo-details-modal\').remove()">Close</button>';
+        modalHtml += '</div>';
+        modalHtml += '</div></div>';
+        
+        $('body').append(modalHtml);
+        
+        // Close on X or background click
+        $('.ssp-modal-close, #ssp-silo-details-modal').on('click', function(e) {
+            if ($(e.target).is('#ssp-silo-details-modal') || $(e.target).is('.ssp-modal-close')) {
+                $('#ssp-silo-details-modal').remove();
+            }
+        });
+    }
+    
     function handlePreviewSilo(e) {
         e.preventDefault();
         
@@ -370,16 +495,18 @@ jQuery(document).ready(function($) {
             },
             success: function(response) {
                 if (response.success) {
-                    showNotice(response.data.message || 'Links generated successfully!', 'success');
-                    $('#link-results').html('<div class="ssp-success">' + response.data.message + '</div>').show();
+                    showNotice(response.data.message || 'Links generated successfully! Refreshing page...', 'success');
+                    // Refresh page to show updated link counts
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1500);
                 } else {
                     showNotice(response.data || 'Failed to generate links', 'error');
+                    $button.prop('disabled', false).text('Generate Links');
                 }
             },
             error: function() {
                 showNotice(ssp_ajax.strings.error, 'error');
-            },
-            complete: function() {
                 $button.prop('disabled', false).text('Generate Links');
             }
         });
@@ -449,16 +576,18 @@ jQuery(document).ready(function($) {
             },
             success: function(response) {
                 if (response.success) {
-                    showNotice(response.data.message || 'Links removed successfully!', 'success');
-                    $('#link-results').html('<div class="ssp-success">' + response.data.message + '</div>').show();
+                    showNotice(response.data.message || 'Links removed successfully! Refreshing page...', 'success');
+                    // Refresh page after short delay to show updated state
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1000);
                 } else {
                     showNotice(response.data || 'Failed to remove links', 'error');
+                    $button.prop('disabled', false).text('Remove Links');
                 }
             },
             error: function() {
                 showNotice(ssp_ajax.strings.error, 'error');
-            },
-            complete: function() {
                 $button.prop('disabled', false).text('Remove Links');
             }
         });
@@ -634,22 +763,36 @@ jQuery(document).ready(function($) {
         var $results = $('#preview-results, #link-results');
         var html = '<div class="ssp-preview-results">';
         
-        if (Object.keys(data).length === 0) {
-            html += '<p class="ssp-no-results">No preview data available.</p>';
+        if (!data || Object.keys(data).length === 0) {
+            html += '<p class="ssp-no-results">No preview data available for this silo.</p>';
         } else {
-            html += '<h3>Link Preview</h3>';
+            html += '<h3>📋 Link Preview</h3>';
+            html += '<p class="description">Below are the links that will be created when you click "Generate Links"</p>';
             
+            var totalLinks = 0;
             $.each(data, function(postId, previews) {
-                if (previews.length > 0) {
+                if (previews && previews.length > 0) {
+                    totalLinks += previews.length;
                     html += '<div class="ssp-post-preview">';
-                    html += '<h4>' + getPostTitle(postId) + '</h4>';
+                    html += '<h4>📄 ' + getPostTitle(postId) + '</h4>';
                     html += '<ul class="ssp-preview-links">';
                     
                     $.each(previews, function(index, preview) {
-                        html += '<li>';
-                        html += '<strong>Link to:</strong> ' + preview.target_title + '<br>';
-                        html += '<strong>Anchor:</strong> "' + preview.anchor_text + '"<br>';
-                        html += '<strong>Position:</strong> ' + preview.insertion_point;
+                        html += '<li style="margin-bottom: 15px; padding: 10px; background: #f9f9f9; border-left: 3px solid #0073aa;">';
+                        html += '<strong>🔗 Links to:</strong> ' + preview.target_title + '<br>';
+                        html += '<strong>⚓ Anchor Text:</strong> <code style="background: #fff; padding: 2px 6px;">' + preview.anchor_text + '</code>';
+                        
+                        // Show anchor variations if available
+                        if (preview.anchor_variations && preview.anchor_variations.length > 1) {
+                            html += '<br><span style="color: #666; font-size: 12px;">Variations: ';
+                            preview.anchor_variations.forEach(function(variation, i) {
+                                if (i > 0) html += ', ';
+                                html += '<code style="background: #fff; padding: 2px 4px; font-size: 11px;">' + variation + '</code>';
+                            });
+                            html += '</span>';
+                        }
+                        
+                        html += '<br><strong>📍 Insertion:</strong> <span style="color: #666;">' + preview.insertion_point + '</span>';
                         html += '</li>';
                     });
                     
@@ -657,6 +800,10 @@ jQuery(document).ready(function($) {
                     html += '</div>';
                 }
             });
+            
+            html += '<p style="margin-top: 20px; padding: 10px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 3px;">';
+            html += '<strong>✅ Total Links:</strong> ' + totalLinks + ' link' + (totalLinks !== 1 ? 's' : '') + ' will be created';
+            html += '</p>';
         }
         
         html += '</div>';
@@ -837,25 +984,137 @@ jQuery(document).ready(function($) {
         var $result = $('#check-tables-result');
         
         $button.prop('disabled', true).text('Checking...');
+        $result.html('<p>Checking database tables...</p>');
         
-        // Simple table check - this would need a new AJAX endpoint
-        $result.html('<div class="notice notice-info"><p>Table check functionality would go here. Check your database for tables starting with wp_ssp_</p></div>');
-        
-        $button.prop('disabled', false).text('Check Tables');
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_check_tables',
+                nonce: ssp_ajax.nonce
+            },
+            success: function(response) {
+                $button.prop('disabled', false).text('Check Tables');
+                
+                if (response.success) {
+                    var noticeClass = response.data.all_exist ? 'notice-success' : 'notice-warning';
+                    var html = '<div class="notice ' + noticeClass + '"><p>' + response.data.message + '</p>';
+                    
+                    html += '<table class="widefat" style="margin-top: 10px;"><thead><tr><th>Table Name</th><th>Status</th></tr></thead><tbody>';
+                    response.data.tables.forEach(function(table) {
+                        var statusColor = table.exists ? 'green' : 'red';
+                        var statusIcon = table.exists ? '✅' : '❌';
+                        html += '<tr><td>' + table.table + '</td><td style="color: ' + statusColor + '; font-weight: bold;">' + statusIcon + ' ' + table.status + '</td></tr>';
+                    });
+                    html += '</tbody></table></div>';
+                    
+                    $result.html(html);
+                } else {
+                    $result.html('<div class="notice notice-error"><p>Error: ' + (response.data || 'Failed to check tables') + '</p></div>');
+                }
+            },
+            error: function() {
+                $button.prop('disabled', false).text('Check Tables');
+                $result.html('<div class="notice notice-error"><p>Error checking tables</p></div>');
+            }
+        });
     }
     
-    function handleCheckLogs(e) {
+    function handleViewDebugReport(e) {
         e.preventDefault();
         
         var $button = $(this);
-        var $result = $('#check-logs-result');
+        var $container = $('#debug-report-container');
         
-        $button.prop('disabled', true).text('Checking...');
+        $button.prop('disabled', true).text('Loading...');
         
-        // Simple log check - this would need a new AJAX endpoint
-        $result.html('<div class="notice notice-info"><p>Check your WordPress debug.log file in wp-content/ for SSP entries</p></div>');
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_get_debug_report',
+                nonce: ssp_ajax.nonce
+            },
+            success: function(response) {
+                $button.prop('disabled', false).text('📋 View Debug Report');
+                
+                if (response.success && response.data.logs) {
+                    var logs = response.data.logs;
+                    var html = '<div class="debug-report-table">';
+                    html += '<table class="wp-list-table widefat striped">';
+                    html += '<thead><tr><th>Time</th><th>Level</th><th>Message</th><th>Context</th></tr></thead>';
+                    html += '<tbody>';
+                    
+                    if (logs.length > 0) {
+                        logs.forEach(function(log) {
+                            var levelClass = 'log-' + log.level.toLowerCase();
+                            html += '<tr class="' + levelClass + '">';
+                            html += '<td style="white-space: nowrap;">' + log.created_at + '</td>';
+                            html += '<td><span class="log-badge log-badge-' + log.level.toLowerCase() + '">' + log.level.toUpperCase() + '</span></td>';
+                            html += '<td>' + log.message + '</td>';
+                            html += '<td style="font-size: 11px; color: #666;">' + (log.context || '-') + '</td>';
+                            html += '</tr>';
+                        });
+                    } else {
+                        html += '<tr><td colspan="4">No logs found</td></tr>';
+                    }
+                    
+                    html += '</tbody></table>';
+                    html += '</div>';
+                    
+                    $container.html(html).slideDown();
+                } else {
+                    showNotice('No logs found', 'info');
+                }
+            },
+            error: function() {
+                $button.prop('disabled', false).text('📋 View Debug Report');
+                showNotice('Error loading debug report', 'error');
+            }
+        });
+    }
+    
+    function handleDownloadDebugReport(e) {
+        e.preventDefault();
         
-        $button.prop('disabled', false).text('Check Recent Logs');
+        // Open download in new window
+        var url = ssp_ajax.ajax_url + '?action=ssp_download_debug_report&nonce=' + ssp_ajax.nonce;
+        window.open(url, '_blank');
+        showNotice('Debug report download started', 'success');
+    }
+    
+    function handleClearDebugLogs(e) {
+        e.preventDefault();
+        
+        if (!confirm('Are you sure you want to clear all debug logs? This cannot be undone.')) {
+            return;
+        }
+        
+        var $button = $(this);
+        $button.prop('disabled', true).text('Clearing...');
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_clear_debug_logs',
+                nonce: ssp_ajax.nonce
+            },
+            success: function(response) {
+                $button.prop('disabled', false).text('🗑️ Clear All Logs');
+                
+                if (response.success) {
+                    showNotice('Debug logs cleared successfully', 'success');
+                    $('#debug-report-container').slideUp().html('');
+                } else {
+                    showNotice(response.data || 'Failed to clear logs', 'error');
+                }
+            },
+            error: function() {
+                $button.prop('disabled', false).text('🗑️ Clear All Logs');
+                showNotice('Error clearing logs', 'error');
+            }
+        });
     }
     
     function showNotice(message, type) {
@@ -1037,5 +1296,255 @@ jQuery(document).ready(function($) {
                 showNotice(ssp_ajax.strings.error, 'error');
             }
         });
+    }
+    
+    /**
+     * Handle load anchor report
+     */
+    function handleLoadAnchorReport(e) {
+        if (e) e.preventDefault();
+        
+        var siloId = $('#anchor-silo-filter').val();
+        var statusFilter = $('#anchor-status-filter').val();
+        
+        $('#anchor-report-tbody').html('<tr><td colspan="7" style="text-align: center; padding: 20px;">Loading...</td></tr>');
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_get_anchor_report',
+                nonce: ssp_ajax.nonce,
+                silo_id: siloId || '',
+                status_filter: statusFilter || 'all'
+            },
+            success: function(response) {
+                if (response.success) {
+                    displayAnchorReport(response.data);
+                } else {
+                    showNotice(response.data || 'Failed to load anchor report', 'error');
+                    $('#anchor-report-tbody').html('<tr><td colspan="7" style="text-align: center; padding: 20px;">Error loading data</td></tr>');
+                }
+            },
+            error: function() {
+                showNotice('Error loading anchor report', 'error');
+                $('#anchor-report-tbody').html('<tr><td colspan="7" style="text-align: center; padding: 20px;">Error loading data</td></tr>');
+            }
+        });
+    }
+    
+    /**
+     * Display anchor report
+     */
+    function displayAnchorReport(data) {
+        // Update stats
+        $('#total-anchors-count').text(data.stats.total);
+        $('#healthy-anchors-count').text(data.stats.healthy);
+        $('#warning-anchors-count').text(data.stats.warning);
+        $('#danger-anchors-count').text(data.stats.danger);
+        
+        // Build table
+        var html = '';
+        
+        if (data.anchors.length === 0) {
+            html = '<tr><td colspan="7" style="text-align: center; padding: 20px;">No anchor data found. Create some links first!</td></tr>';
+        } else {
+            data.anchors.forEach(function(anchor) {
+                var statusIcon = '';
+                var statusColor = '';
+                
+                if (anchor.status === 'good') {
+                    statusIcon = '✅';
+                    statusColor = '#28a745';
+                } else if (anchor.status === 'warning') {
+                    statusIcon = '⚠️';
+                    statusColor = '#ffc107';
+                } else {
+                    statusIcon = '🔴';
+                    statusColor = '#dc3545';
+                }
+                
+                var healthBarColor = anchor.health_score > 70 ? '#28a745' : (anchor.health_score > 40 ? '#ffc107' : '#dc3545');
+                var healthBarWidth = Math.max(20, anchor.health_score); // Minimum 20% width for visibility
+                
+                html += '<tr>';
+                html += '<td style="text-align: center; font-size: 20px;">' + statusIcon + '</td>';
+                html += '<td><strong>' + escapeHtml(anchor.anchor_text) + '</strong></td>';
+                html += '<td style="text-align: center;"><span style="background: ' + statusColor + '; color: white; padding: 3px 10px; border-radius: 3px; font-weight: bold;">' + anchor.usage_count + '</span></td>';
+                html += '<td style="text-align: center;">' + anchor.percentage + '%</td>';
+                html += '<td><div style="background: #f0f0f0; border-radius: 5px; height: 20px; overflow: hidden; position: relative;"><div style="background: ' + healthBarColor + '; width: ' + anchor.health_score + '%; height: 100%;"></div><span style="position: absolute; top: 0; left: 0; right: 0; text-align: center; line-height: 20px; font-size: 11px; font-weight: bold; color: #333;">' + anchor.health_score + '%</span></div></td>';
+                html += '<td style="text-align: center;">' + anchor.post_count + ' post' + (anchor.post_count !== 1 ? 's' : '') + '</td>';
+                html += '<td style="text-align: center;"><button class="button button-small view-anchor-details" data-anchor="' + escapeHtml(anchor.anchor_text) + '">View Details</button></td>';
+                html += '</tr>';
+            });
+        }
+        
+        $('#anchor-report-tbody').html(html);
+    }
+    
+    /**
+     * Handle view anchor details
+     */
+    function handleViewAnchorDetails(e) {
+        e.preventDefault();
+        
+        var anchorText = $(this).data('anchor');
+        var siloId = $('#anchor-silo-filter').val();
+        
+        $('#anchor-modal-title').text('Details for: "' + anchorText + '"');
+        $('#anchor-modal-body').html('<p style="text-align: center; padding: 20px;">Loading...</p>');
+        $('#anchor-details-modal').fadeIn();
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_get_anchor_details',
+                nonce: ssp_ajax.nonce,
+                anchor_text: anchorText,
+                silo_id: siloId || ''
+            },
+            success: function(response) {
+                if (response.success) {
+                    displayAnchorDetails(response.data);
+                } else {
+                    $('#anchor-modal-body').html('<p style="color: red;">Error loading details</p>');
+                }
+            },
+            error: function() {
+                $('#anchor-modal-body').html('<p style="color: red;">Error loading details</p>');
+            }
+        });
+    }
+    
+    /**
+     * Display anchor details in modal
+     */
+    function displayAnchorDetails(data) {
+        var html = '<h3>Anchor: "' + escapeHtml(data.anchor_text) + '"</h3>';
+        html += '<p><strong>Total Usage:</strong> ' + data.total + ' times</p>';
+        html += '<hr>';
+        html += '<h4>Usage Details:</h4>';
+        html += '<table class="wp-list-table widefat fixed striped">';
+        html += '<thead><tr><th>From Post</th><th>To Post</th><th>Silo</th><th>Created</th></tr></thead>';
+        html += '<tbody>';
+        
+        if (data.details && data.details.length > 0) {
+            data.details.forEach(function(detail) {
+                html += '<tr>';
+                html += '<td><a href="' + detail.source_post_url + '" target="_blank">' + escapeHtml(detail.source_post_title) + '</a></td>';
+                html += '<td><a href="' + detail.target_post_url + '" target="_blank">' + escapeHtml(detail.target_post_title) + '</a></td>';
+                html += '<td>' + (detail.silo_name ? escapeHtml(detail.silo_name) : '<em>Deleted Silo</em>') + '</td>';
+                html += '<td>' + detail.created_at + '</td>';
+                html += '</tr>';
+            });
+        } else {
+            html += '<tr><td colspan="4" style="text-align: center; padding: 20px;">No usage found</td></tr>';
+        }
+        
+        html += '</tbody></table>';
+        
+        $('#anchor-modal-body').html(html);
+    }
+    
+    /**
+     * Handle save anchor settings
+     */
+    function handleSaveAnchorSettings(e) {
+        e.preventDefault();
+        
+        var $form = $(this);
+        var warningThreshold = $('#warning-threshold').val();
+        var maxUsage = $('#max-usage').val();
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_save_anchor_settings',
+                nonce: ssp_ajax.nonce,
+                warning_threshold: warningThreshold,
+                max_usage_per_anchor: maxUsage
+            },
+            success: function(response) {
+                if (response.success) {
+                    showNotice('Settings saved! Refreshing report...', 'success');
+                    // Reload report with new settings
+                    setTimeout(handleLoadAnchorReport, 1000);
+                } else {
+                    showNotice(response.data || 'Failed to save settings', 'error');
+                }
+            },
+            error: function() {
+                showNotice('Error saving settings', 'error');
+            }
+        });
+    }
+    
+    /**
+     * Handle export anchor report
+     */
+    function handleExportAnchorReport(e) {
+        e.preventDefault();
+        
+        var siloId = $('#anchor-silo-filter').val();
+        
+        $(this).prop('disabled', true).text('Exporting...');
+        
+        var $btn = $(this);
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_export_anchor_report',
+                nonce: ssp_ajax.nonce,
+                silo_id: siloId || ''
+            },
+            success: function(response) {
+                if (response.success) {
+                    // Convert to CSV and download
+                    var csv = response.data.csv_data.map(function(row) {
+                        return row.map(function(cell) {
+                            return '"' + String(cell).replace(/"/g, '""') + '"';
+                        }).join(',');
+                    }).join('\n');
+                    
+                    var blob = new Blob([csv], { type: 'text/csv' });
+                    var url = window.URL.createObjectURL(blob);
+                    var a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'anchor-report-' + Date.now() + '.csv';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                    
+                    showNotice('Report exported successfully!', 'success');
+                } else {
+                    showNotice(response.data || 'Failed to export report', 'error');
+                }
+                
+                $btn.prop('disabled', false).text('📥 Export CSV');
+            },
+            error: function() {
+                showNotice('Error exporting report', 'error');
+                $btn.prop('disabled', false).text('📥 Export CSV');
+            }
+        });
+    }
+    
+    /**
+     * Escape HTML
+     */
+    function escapeHtml(text) {
+        var map = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;'
+        };
+        return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
     }
 });

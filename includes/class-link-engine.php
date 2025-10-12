@@ -13,6 +13,9 @@ class SSP_Link_Engine {
     private static $instance = null;
     private $ai_integration;
     private $link_marker_prefix = 'ssp-link-';
+    private $updating_post = false; // Prevent recursive updates
+    private $excluded_posts_cache = null; // Cache for excluded posts
+    private $excluded_anchors_cache = null; // Cache for excluded anchors
     
     public static function get_instance() {
         if (null === self::$instance) {
@@ -36,6 +39,11 @@ class SSP_Link_Engine {
      * Clear post cache when post is saved
      */
     public function clear_post_cache($post_id, $post) {
+        // Skip if we're currently updating this post (prevent recursive issues)
+        if ($this->updating_post) {
+            return;
+        }
+        
         // Clear meta tags cache
         delete_transient('ssp_meta_tags_' . $post_id);
         
@@ -48,6 +56,11 @@ class SSP_Link_Engine {
      */
     public function generate_links_for_silo($silo_id, $post_ids = array()) {
         error_log("SSP Link Generation: Starting generation for silo {$silo_id}");
+        
+        // Increase time limit for large silos
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(300); // 5 minutes max
+        }
         
         $silo = SSP_Database::get_silo($silo_id);
         if (!$silo) {
@@ -85,7 +98,7 @@ class SSP_Link_Engine {
                 break;
                 
             case 'chained':
-                $links_created = $this->create_chained_links($silo_id, $silo_posts, $silo->settings);
+                $links_created = $this->create_chained_links($silo_id, $pillar_post, $silo_posts, $silo->settings);
                 break;
                 
             case 'cross_linking':
@@ -134,14 +147,19 @@ class SSP_Link_Engine {
             return $a->position - $b->position;
         });
         
-        // Create array with pillar post and silo posts
+        // Create array with posts
         $all_posts = array();
         
-        // Add pillar post
-        $all_posts[] = (object) array(
-            'ID' => $pillar_post->ID,
-            'post_title' => $pillar_post->post_title
-        );
+        // Check if we should include pillar in the loop (supports_to_pillar toggle)
+        $include_pillar_in_loop = isset($settings['supports_to_pillar']) ? $settings['supports_to_pillar'] : true;
+        
+        if ($include_pillar_in_loop) {
+            // Add pillar post to create full loop
+            $all_posts[] = (object) array(
+                'ID' => $pillar_post->ID,
+                'post_title' => $pillar_post->post_title
+            );
+        }
         
         // Add silo posts
         foreach ($silo_posts as $silo_post) {
@@ -154,6 +172,7 @@ class SSP_Link_Engine {
             }
         }
         
+        // Create the loop/chain
         foreach ($all_posts as $index => $current_post) {
             $next_index = ($index + 1) % count($all_posts);
             $next_post = $all_posts[$next_index];
@@ -164,12 +183,30 @@ class SSP_Link_Engine {
             }
             
             // Create link
-            error_log("SSP Link Generation: Attempting to create link from post {$current_post->ID} to {$next_post->ID}");
+            error_log("SSP Linear Mode: Creating link from post {$current_post->ID} to {$next_post->ID}");
             if ($this->create_link($silo_id, $current_post->ID, $next_post->ID, $settings)) {
                 $links_created++;
-                error_log("SSP Link Generation: Successfully created link from post {$current_post->ID} to {$next_post->ID}");
+                error_log("SSP Linear Mode: Successfully created link");
             } else {
-                error_log("SSP Link Generation: Failed to create link from post {$current_post->ID} to {$next_post->ID}");
+                error_log("SSP Linear Mode: Failed to create link");
+            }
+        }
+        
+        // NEW: If pillar not in loop, optionally link pillar to supports
+        if (!$include_pillar_in_loop && isset($settings['pillar_to_supports']) && $settings['pillar_to_supports']) {
+            $max_pillar_links = intval($settings['max_pillar_links'] ?? 5);
+            $pillar_links_created = 0;
+            
+            foreach ($silo_posts as $silo_post) {
+                if ($pillar_links_created >= $max_pillar_links) {
+                    break;
+                }
+                
+                if ($this->create_link($silo_id, $pillar_post->ID, $silo_post->post_id, $settings)) {
+                    $links_created++;
+                    $pillar_links_created++;
+                    error_log("SSP Linear Mode: Added pillar → support link to post {$silo_post->post_id}");
+                }
             }
         }
         
@@ -179,7 +216,7 @@ class SSP_Link_Engine {
     /**
      * Create chained links
      */
-    private function create_chained_links($silo_id, $silo_posts, $settings) {
+    private function create_chained_links($silo_id, $pillar_post, $silo_posts, $settings) {
         $links_created = 0;
         $settings = json_decode($settings, true);
         
@@ -193,6 +230,7 @@ class SSP_Link_Engine {
             return $a->position - $b->position;
         });
         
+        // Create chain links between adjacent posts
         for ($i = 0; $i < count($silo_posts); $i++) {
             $current_post = $silo_posts[$i];
             
@@ -209,6 +247,32 @@ class SSP_Link_Engine {
                 $prev_post = $silo_posts[$i - 1];
                 if ($this->create_link($silo_id, $current_post->post_id, $prev_post->post_id, $settings)) {
                     $links_created++;
+                }
+            }
+            
+            // NEW: Support posts link to pillar (if enabled) - Universal Option
+            if ($pillar_post && isset($settings['supports_to_pillar']) && $settings['supports_to_pillar']) {
+                if ($this->create_link($silo_id, $current_post->post_id, $pillar_post->ID, $settings)) {
+                    $links_created++;
+                    error_log("SSP Chained Mode: Added support → pillar link from post {$current_post->post_id}");
+                }
+            }
+        }
+        
+        // NEW: Pillar links to supports (if enabled) - Universal Option
+        if ($pillar_post && isset($settings['pillar_to_supports']) && $settings['pillar_to_supports']) {
+            $max_pillar_links = intval($settings['max_pillar_links'] ?? 5);
+            $pillar_links_created = 0;
+            
+            foreach ($silo_posts as $silo_post) {
+                if ($pillar_links_created >= $max_pillar_links) {
+                    break;
+                }
+                
+                if ($this->create_link($silo_id, $pillar_post->ID, $silo_post->post_id, $settings)) {
+                    $links_created++;
+                    $pillar_links_created++;
+                    error_log("SSP Chained Mode: Added pillar → support link to post {$silo_post->post_id}");
                 }
             }
         }
@@ -246,6 +310,13 @@ class SSP_Link_Engine {
                     'post_title' => $post->post_title
                 );
             }
+        }
+        
+        // Safety check: Cross-linking can create N*(N-1) links
+        // Warn if silo is too large for cross-linking
+        $post_count = count($all_posts);
+        if ($post_count > 20) {
+            error_log("SSP Cross-Linking Warning: Silo has {$post_count} posts. Cross-linking will create " . ($post_count * ($post_count - 1)) . " links. Consider using a different linking mode for large silos.");
         }
         
         foreach ($all_posts as $source_post) {
@@ -301,6 +372,34 @@ class SSP_Link_Engine {
             }
         }
         
+        // NEW: Support posts link to pillar (if enabled) - Universal Option
+        if (isset($settings['supports_to_pillar']) && $settings['supports_to_pillar']) {
+            foreach ($silo_posts as $silo_post) {
+                if ($this->create_link($silo_id, $silo_post->post_id, $pillar_post->ID, $settings)) {
+                    $links_created++;
+                    error_log("SSP Custom Mode: Added support → pillar link from post {$silo_post->post_id}");
+                }
+            }
+        }
+        
+        // NEW: Pillar links to supports (if enabled) - Universal Option
+        if (isset($settings['pillar_to_supports']) && $settings['pillar_to_supports']) {
+            $max_pillar_links = intval($settings['max_pillar_links'] ?? 5);
+            $pillar_links_created = 0;
+            
+            foreach ($silo_posts as $silo_post) {
+                if ($pillar_links_created >= $max_pillar_links) {
+                    break;
+                }
+                
+                if ($this->create_link($silo_id, $pillar_post->ID, $silo_post->post_id, $settings)) {
+                    $links_created++;
+                    $pillar_links_created++;
+                    error_log("SSP Custom Mode: Added pillar → support link to post {$silo_post->post_id}");
+                }
+            }
+        }
+        
         return $links_created;
     }
     
@@ -318,14 +417,18 @@ class SSP_Link_Engine {
         
         error_log("SSP Star/Hub Mode: Creating pillar-centric links for silo {$silo_id}");
         
-        // All support posts link TO the pillar
-        foreach ($silo_posts as $silo_post) {
-            $post = get_post($silo_post->post_id);
-            if ($post) {
-                error_log("SSP Star/Hub Mode: Creating link from support post {$silo_post->post_id} to pillar {$pillar_post->ID}");
-                if ($this->create_link($silo_id, $silo_post->post_id, $pillar_post->ID, $settings)) {
-                    $links_created++;
-                    error_log("SSP Star/Hub Mode: Successfully created support→pillar link");
+        // Support posts link TO pillar (if enabled)
+        $supports_to_pillar = isset($settings['supports_to_pillar']) ? $settings['supports_to_pillar'] : true; // Default ON
+        
+        if ($supports_to_pillar) {
+            foreach ($silo_posts as $silo_post) {
+                $post = get_post($silo_post->post_id);
+                if ($post) {
+                    error_log("SSP Star/Hub Mode: Creating link from support post {$silo_post->post_id} to pillar {$pillar_post->ID}");
+                    if ($this->create_link($silo_id, $silo_post->post_id, $pillar_post->ID, $settings)) {
+                        $links_created++;
+                        error_log("SSP Star/Hub Mode: Successfully created support→pillar link");
+                    }
                 }
             }
         }
@@ -418,6 +521,38 @@ class SSP_Link_Engine {
             }
         }
         
+        // NEW: Ensure support posts link to pillar if enabled (override contextual if needed)
+        if (isset($settings['supports_to_pillar']) && $settings['supports_to_pillar']) {
+            foreach ($silo_posts as $silo_post) {
+                $post = get_post($silo_post->post_id);
+                if ($post) {
+                    // Create link from support to pillar (if doesn't exist)
+                    if ($this->create_link($silo_id, $silo_post->post_id, $pillar_post->ID, $settings)) {
+                        $links_created++;
+                        error_log("SSP AI-Contextual Mode: Added guaranteed support → pillar link from post {$silo_post->post_id}");
+                    }
+                }
+            }
+        }
+        
+        // NEW: Pillar links to supports (if enabled)
+        if (isset($settings['pillar_to_supports']) && $settings['pillar_to_supports']) {
+            $max_pillar_links = intval($settings['max_pillar_links'] ?? 5);
+            $pillar_links_created = 0;
+            
+            foreach ($silo_posts as $silo_post) {
+                if ($pillar_links_created >= $max_pillar_links) {
+                    break;
+                }
+                
+                if ($this->create_link($silo_id, $pillar_post->ID, $silo_post->post_id, $settings)) {
+                    $links_created++;
+                    $pillar_links_created++;
+                    error_log("SSP AI-Contextual Mode: Added pillar → support link to post {$silo_post->post_id}");
+                }
+            }
+        }
+        
         error_log("SSP AI-Contextual Mode: Created {$links_created} total contextual links");
         return $links_created;
     }
@@ -441,14 +576,18 @@ class SSP_Link_Engine {
             return $a->position - $b->position;
         });
         
-        // Step 1: All support posts link TO the pillar (hub structure)
-        foreach ($silo_posts as $silo_post) {
-            $post = get_post($silo_post->post_id);
-            if ($post) {
-                error_log("SSP Hub-Chain Mode: Creating hub link from support post {$silo_post->post_id} to pillar {$pillar_post->ID}");
-                if ($this->create_link($silo_id, $silo_post->post_id, $pillar_post->ID, $settings)) {
-                    $links_created++;
-                    error_log("SSP Hub-Chain Mode: Successfully created support→pillar link");
+        // Step 1: Support posts link TO pillar (hub structure) - if enabled
+        $supports_to_pillar = isset($settings['supports_to_pillar']) ? $settings['supports_to_pillar'] : true; // Default ON
+        
+        if ($supports_to_pillar) {
+            foreach ($silo_posts as $silo_post) {
+                $post = get_post($silo_post->post_id);
+                if ($post) {
+                    error_log("SSP Hub-Chain Mode: Creating hub link from support post {$silo_post->post_id} to pillar {$pillar_post->ID}");
+                    if ($this->create_link($silo_id, $silo_post->post_id, $pillar_post->ID, $settings)) {
+                        $links_created++;
+                        error_log("SSP Hub-Chain Mode: Successfully created support→pillar link");
+                    }
                 }
             }
         }
@@ -639,6 +778,21 @@ class SSP_Link_Engine {
      * Create individual link
      */
     private function create_link($silo_id, $source_post_id, $target_post_id, $settings) {
+        // Validate posts exist
+        $source_post = get_post($source_post_id);
+        $target_post = get_post($target_post_id);
+        
+        if (!$source_post || !$target_post) {
+            error_log("SSP Link Creation Failed: Source or target post not found (source: {$source_post_id}, target: {$target_post_id})");
+            return false;
+        }
+        
+        // Don't link to unpublished posts
+        if ($source_post->post_status !== 'publish' || $target_post->post_status !== 'publish') {
+            error_log("SSP Link Creation Skipped: One or both posts are not published (source: {$source_post->post_status}, target: {$target_post->post_status})");
+            return false;
+        }
+        
         // Check if link already exists
         $existing_links = SSP_Database::get_post_links($source_post_id, $silo_id);
         foreach ($existing_links as $link) {
@@ -648,7 +802,7 @@ class SSP_Link_Engine {
             }
         }
         
-        // Check exclusions
+        // Check if target post is excluded
         if ($this->is_excluded($source_post_id, $target_post_id)) {
             error_log("SSP Link Creation Skipped: Post {$target_post_id} is excluded");
             return false;
@@ -659,6 +813,41 @@ class SSP_Link_Engine {
         if (!$anchor_text) {
             error_log("SSP Link Creation Failed: No anchor text generated for posts {$source_post_id} -> {$target_post_id}");
             return false;
+        }
+        
+        // Check if anchor text is excluded
+        if ($this->is_excluded($source_post_id, $target_post_id, $anchor_text)) {
+            error_log("SSP Link Creation Skipped: Anchor text '{$anchor_text}' is excluded");
+            return false;
+        }
+        
+        // Check anchor usage limits
+        $anchor_settings = get_option('ssp_anchor_settings', array(
+            'max_usage_per_anchor' => 10,
+            'warning_threshold' => 7
+        ));
+        
+        if (SSP_Database::check_anchor_limit($anchor_text, $anchor_settings['max_usage_per_anchor'])) {
+            error_log("SSP Link Creation Warning: Anchor '{$anchor_text}' has reached max usage limit ({$anchor_settings['max_usage_per_anchor']}). Skipping to prevent over-optimization.");
+            // Try to get alternative anchor text
+            $all_suggestions = $this->ai_integration->get_anchor_suggestions($source_post_id, $target_post_id);
+            if (!empty($all_suggestions)) {
+                foreach ($all_suggestions as $alt_anchor) {
+                    if (!SSP_Database::check_anchor_limit($alt_anchor, $anchor_settings['max_usage_per_anchor'])) {
+                        $anchor_text = $alt_anchor;
+                        error_log("SSP Link Creation: Using alternative anchor '{$anchor_text}' instead");
+                        break;
+                    }
+                }
+                
+                // If all suggestions are over limit, skip this link
+                if (SSP_Database::check_anchor_limit($anchor_text, $anchor_settings['max_usage_per_anchor'])) {
+                    error_log("SSP Link Creation Skipped: All anchor suggestions for {$source_post_id} -> {$target_post_id} exceed usage limits");
+                    return false;
+                }
+            } else {
+                return false; // No alternatives available
+            }
         }
         
         // Find insertion point
@@ -675,7 +864,7 @@ class SSP_Link_Engine {
             'target_post_id' => $target_post_id,
             'anchor_text' => $anchor_text,
             'link_position' => $insertion_point,
-            'placement_type' => $settings['placement_type'] ?? 'inline',
+            'placement_type' => $settings['placement_type'] ?? 'natural',
             'ai_generated' => 0
         );
         
@@ -687,7 +876,7 @@ class SSP_Link_Engine {
         }
         
         // Actually insert the link into the post content
-        $insert_result = $this->insert_link_into_content($source_post_id, $target_post_id, $anchor_text, $insertion_point, $link_id);
+        $insert_result = $this->insert_link_into_content($source_post_id, $target_post_id, $anchor_text, $insertion_point, $link_id, $settings);
         
         if (!$insert_result) {
             error_log("SSP Link Creation Failed: Content insertion failed for posts {$source_post_id} -> {$target_post_id}");
@@ -704,7 +893,7 @@ class SSP_Link_Engine {
     /**
      * Insert link into post content by finding and replacing existing text
      */
-    private function insert_link_into_content($source_post_id, $target_post_id, $anchor_text, $insertion_point, $link_id) {
+    private function insert_link_into_content($source_post_id, $target_post_id, $anchor_text, $insertion_point, $link_id, $settings) {
         $post = get_post($source_post_id);
         if (!$post) {
             error_log("SSP Link Insertion Failed: Source post {$source_post_id} not found");
@@ -730,8 +919,38 @@ class SSP_Link_Engine {
             $link_id
         );
         
-        // NEW APPROACH: Find existing text in content and replace it with link
-        $new_content = $this->find_and_link_text($content, $anchor_text, $link_html, $source_post_id, $target_post_id);
+        // Check placement type
+        $placement_type = $settings['placement_type'] ?? 'natural';
+        
+        // For first_paragraph placement, limit search to first paragraph only
+        if ($placement_type === 'first_paragraph') {
+            $first_para = $this->extract_first_paragraph($content);
+            if ($first_para) {
+                $new_content = $this->find_and_link_text($first_para, $anchor_text, $link_html, $source_post_id, $target_post_id);
+                if ($new_content !== false) {
+                    // Replace first paragraph in full content (only first occurrence)
+                    $first_para_pos = strpos($content, $first_para);
+                    if ($first_para_pos !== false) {
+                        $content = substr_replace($content, $new_content, $first_para_pos, strlen($first_para));
+                        $new_content = $content;
+                    } else {
+                        // Fallback if exact match not found
+                        error_log("SSP Link Insertion Warning: Could not locate first paragraph in content, using str_replace");
+                        $content = str_replace($first_para, $new_content, $content);
+                        $new_content = $content;
+                    }
+                } else {
+                    error_log("SSP Link Insertion: Could not find text in first paragraph, trying full content");
+                    $new_content = $this->find_and_link_text($content, $anchor_text, $link_html, $source_post_id, $target_post_id);
+                }
+            } else {
+                // No first paragraph found, use natural placement
+                $new_content = $this->find_and_link_text($content, $anchor_text, $link_html, $source_post_id, $target_post_id);
+            }
+        } else {
+            // Natural placement - find anywhere in content
+            $new_content = $this->find_and_link_text($content, $anchor_text, $link_html, $source_post_id, $target_post_id);
+        }
         
         if ($new_content === false) {
             error_log("SSP Link Insertion Failed: Could not find suitable text to link in post {$source_post_id}");
@@ -739,10 +958,17 @@ class SSP_Link_Engine {
         }
         
         // Update the post content
+        error_log("SSP Link Insertion: About to update post {$source_post_id}. Content length before: " . strlen($content) . ", after: " . strlen($new_content));
+        
+        // Set flag to prevent recursive updates from other plugins
+        $this->updating_post = true;
+        
         $update_result = wp_update_post(array(
             'ID' => $source_post_id,
             'post_content' => $new_content
         ), true); // true = return WP_Error on failure
+        
+        $this->updating_post = false;
         
         if (is_wp_error($update_result)) {
             error_log("SSP Link Insertion Failed: " . $update_result->get_error_message());
@@ -754,7 +980,13 @@ class SSP_Link_Engine {
             return false;
         }
         
-        error_log("SSP Link Insertion Success: Updated post {$source_post_id} content");
+        // Verify the update by re-reading the post
+        $updated_post = get_post($source_post_id);
+        if ($updated_post && strpos($updated_post->post_content, $this->link_marker_prefix . $link_id) !== false) {
+            error_log("SSP Link Insertion Success: Verified link marker exists in post {$source_post_id} content");
+        } else {
+            error_log("SSP Link Insertion Warning: Link marker NOT found in post {$source_post_id} after update!");
+        }
         
         // Clear cache
         delete_transient('ssp_post_links_' . $source_post_id);
@@ -763,11 +995,34 @@ class SSP_Link_Engine {
     }
     
     /**
+     * Extract first paragraph from content
+     */
+    private function extract_first_paragraph($content) {
+        // Try to find first paragraph tag
+        if (preg_match('/<p[^>]*>(.*?)<\/p>/is', $content, $matches)) {
+            return $matches[0]; // Return full <p>...</p> tag
+        }
+        
+        // If no <p> tags, try to get first text block before double line break
+        $text_content = wp_strip_all_tags($content);
+        $paragraphs = preg_split('/\n\n+/', $text_content);
+        if (!empty($paragraphs[0])) {
+            // Find this text in original content
+            $first_text = trim($paragraphs[0]);
+            if (!empty($first_text) && strlen($first_text) > 50) {
+                return $first_text;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
      * Find existing text in content and replace it with a link
      */
     private function find_and_link_text($content, $anchor_text, $link_html, $source_post_id, $target_post_id) {
         // Remove any existing SSP link markers to search in clean content
-        $clean_content = preg_replace('/<!--\s*' . preg_quote($this->link_marker_prefix) . '\d+\s*-->.*?<!--\s*\/' . preg_quote($this->link_marker_prefix) . '\d+\s*-->/s', '', $content);
+        $clean_content = preg_replace('/<!--\s*' . preg_quote($this->link_marker_prefix, '/') . '\d+\s*-->.*?<!--\s*\/' . preg_quote($this->link_marker_prefix, '/') . '\d+\s*-->/s', '', $content);
         
         // Strategy 1: Try to find exact match (case-insensitive)
         $position = $this->find_text_position($clean_content, $anchor_text, true);
@@ -1252,6 +1507,11 @@ class SSP_Link_Engine {
         $matches = 0;
         $total_anchor_words = count($anchor_words);
         
+        // Prevent division by zero
+        if (empty($total_anchor_words)) {
+            return 0;
+        }
+        
         foreach ($anchor_words as $anchor_word) {
             foreach ($sentence_words as $sentence_word) {
                 if (strpos($sentence_word, $anchor_word) !== false || strpos($anchor_word, $sentence_word) !== false) {
@@ -1281,13 +1541,42 @@ class SSP_Link_Engine {
     /**
      * Check if link is excluded
      */
-    private function is_excluded($source_post_id, $target_post_id) {
+    private function is_excluded($source_post_id, $target_post_id, $anchor_text = null) {
         global $wpdb;
         
-        // Check excluded posts
-        $excluded_posts = $wpdb->get_results($wpdb->prepare("SELECT item_value FROM {$wpdb->prefix}ssp_excluded_items WHERE item_type = %s", 'post'));
-        foreach ($excluded_posts as $excluded) {
-            if ($excluded->item_value == $target_post_id) {
+        // Load excluded posts into cache (one query per request)
+        if ($this->excluded_posts_cache === null) {
+            $excluded_posts = $wpdb->get_results($wpdb->prepare(
+                "SELECT item_value FROM {$wpdb->prefix}ssp_excluded_items WHERE item_type = %s",
+                'post'
+            ));
+            $this->excluded_posts_cache = array();
+            foreach ($excluded_posts as $excluded) {
+                $this->excluded_posts_cache[] = intval($excluded->item_value);
+            }
+        }
+        
+        // Check if target post is excluded
+        if (in_array($target_post_id, $this->excluded_posts_cache)) {
+            return true;
+        }
+        
+        // Check if anchor text is excluded (if provided)
+        if ($anchor_text !== null) {
+            // Load excluded anchors into cache (one query per request)
+            if ($this->excluded_anchors_cache === null) {
+                $excluded_anchors = $wpdb->get_results($wpdb->prepare(
+                    "SELECT item_value FROM {$wpdb->prefix}ssp_excluded_items WHERE item_type = %s",
+                    'anchor'
+                ));
+                $this->excluded_anchors_cache = array();
+                foreach ($excluded_anchors as $excluded) {
+                    $this->excluded_anchors_cache[] = strtolower(trim($excluded->item_value));
+                }
+            }
+            
+            // Check if anchor is excluded (case-insensitive)
+            if (in_array(strtolower(trim($anchor_text)), $this->excluded_anchors_cache)) {
                 return true;
             }
         }
@@ -1369,20 +1658,38 @@ class SSP_Link_Engine {
     public function remove_existing_links($post_id, $silo_id = null) {
         $post = get_post($post_id);
         if (!$post) {
+            error_log("SSP Remove Links Failed: Post {$post_id} not found");
             return false;
         }
         
         $content = $post->post_content;
+        $original_content = $content;
         
         // Remove existing SSP links with markers
-        $pattern = '/<!--\s*' . preg_quote($this->link_marker_prefix) . '\d+\s*-->.*?<!--\s*\/' . preg_quote($this->link_marker_prefix) . '\d+\s*-->/s';
+        $pattern = '/<!--\s*' . preg_quote($this->link_marker_prefix, '/') . '\d+\s*-->.*?<!--\s*\/' . preg_quote($this->link_marker_prefix, '/') . '\d+\s*-->/s';
         $content = preg_replace($pattern, '', $content);
         
+        // Log if content was modified
+        if ($content !== $original_content) {
+            error_log("SSP Remove Links: Found and removed SSP links from post {$post_id}");
+            error_log("SSP Remove Links Pattern: " . $pattern);
+        } else {
+            error_log("SSP Remove Links: No SSP link markers found in post {$post_id} content");
+            error_log("SSP Remove Links Pattern: " . $pattern);
+            // Still mark links as removed in database even if markers not found
+            SSP_Database::remove_post_links($post_id, $silo_id);
+            return true;
+        }
+        
         // Update post content
+        $this->updating_post = true;
+        
         $update_result = wp_update_post(array(
             'ID' => $post_id,
             'post_content' => $content
         ), true); // true = return WP_Error on failure
+        
+        $this->updating_post = false;
         
         if (is_wp_error($update_result)) {
             error_log("SSP Remove Links Failed: " . $update_result->get_error_message());
@@ -1394,8 +1701,17 @@ class SSP_Link_Engine {
             return false;
         }
         
+        error_log("SSP Remove Links Success: Updated post {$post_id} content");
+        
         // Mark links as removed in database
         SSP_Database::remove_post_links($post_id, $silo_id);
+        
+        // Clear cache so frontend shows updated content
+        delete_transient('ssp_post_links_' . $post_id);
+        
+        // Clear post cache
+        wp_cache_delete($post_id, 'posts');
+        wp_cache_delete($post_id, 'post_meta');
         
         return true;
     }
@@ -1455,6 +1771,18 @@ class SSP_Link_Engine {
                 
             case 'cross_linking':
                 $previews = $this->preview_cross_linking($silo_id, $post, $silo, $silo_posts, $settings);
+                break;
+                
+            case 'star_hub':
+                $previews = $this->preview_star_hub_links($silo_id, $post, $silo, $silo_posts, $settings);
+                break;
+                
+            case 'hub_chain':
+                $previews = $this->preview_hub_chain_links($silo_id, $post, $silo, $silo_posts, $settings);
+                break;
+                
+            case 'ai_contextual':
+                $previews = $this->preview_ai_contextual_links($silo_id, $post, $silo, $silo_posts, $settings);
                 break;
                 
             case 'custom':
@@ -1580,6 +1908,193 @@ class SSP_Link_Engine {
         $all_posts = array_merge(array($pillar_post), $silo_posts);
         
         foreach ($all_posts as $target_post) {
+            if ($target_post->ID == $post->ID) {
+                continue;
+            }
+            
+            $anchor_text = $this->get_anchor_text($post->ID, $target_post->ID, $settings);
+            $anchor_variations = $this->get_anchor_variations($post->ID, $target_post->ID, $settings);
+            
+            if ($anchor_text) {
+                $previews[] = array(
+                    'target_post_id' => $target_post->ID,
+                    'target_title' => $target_post->post_title,
+                    'anchor_text' => $anchor_text,
+                    'anchor_variations' => $anchor_variations,
+                    'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
+                );
+            }
+        }
+        
+        return $previews;
+    }
+    
+    /**
+     * Preview star/hub links
+     */
+    private function preview_star_hub_links($silo_id, $post, $silo, $silo_posts, $settings) {
+        $previews = array();
+        $pillar_post = get_post($silo->pillar_post_id);
+        
+        // Check if supports should link to pillar
+        $supports_to_pillar = isset($settings['supports_to_pillar']) ? $settings['supports_to_pillar'] : true;
+        
+        // If current post is a support post and setting is enabled, it links to pillar
+        if ($post->ID != $silo->pillar_post_id && $supports_to_pillar) {
+            $anchor_text = $this->get_anchor_text($post->ID, $pillar_post->ID, $settings);
+            $anchor_variations = $this->get_anchor_variations($post->ID, $pillar_post->ID, $settings);
+            
+            if ($anchor_text) {
+                $previews[] = array(
+                    'target_post_id' => $pillar_post->ID,
+                    'target_title' => $pillar_post->post_title,
+                    'anchor_text' => $anchor_text,
+                    'anchor_variations' => $anchor_variations,
+                    'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
+                );
+            }
+        }
+        
+        // If current post is pillar and pillar_to_supports is enabled
+        if ($post->ID == $silo->pillar_post_id && isset($settings['pillar_to_supports']) && $settings['pillar_to_supports']) {
+            $max_pillar_links = intval($settings['max_pillar_links'] ?? 5);
+            $links_added = 0;
+            
+            foreach ($silo_posts as $silo_post) {
+                if ($links_added >= $max_pillar_links) {
+                    break;
+                }
+                
+                $support_post = get_post($silo_post->post_id);
+                if ($support_post) {
+                    $anchor_text = $this->get_anchor_text($post->ID, $support_post->ID, $settings);
+                    $anchor_variations = $this->get_anchor_variations($post->ID, $support_post->ID, $settings);
+                    
+                    if ($anchor_text) {
+                        $previews[] = array(
+                            'target_post_id' => $support_post->ID,
+                            'target_title' => $support_post->post_title,
+                            'anchor_text' => $anchor_text,
+                            'anchor_variations' => $anchor_variations,
+                            'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
+                        );
+                        $links_added++;
+                    }
+                }
+            }
+        }
+        
+        return $previews;
+    }
+    
+    /**
+     * Preview hub-chain links
+     */
+    private function preview_hub_chain_links($silo_id, $post, $silo, $silo_posts, $settings) {
+        $previews = array();
+        $pillar_post = get_post($silo->pillar_post_id);
+        
+        // Sort posts by position
+        usort($silo_posts, function($a, $b) {
+            return $a->position - $b->position;
+        });
+        
+        // Check if supports should link to pillar
+        $supports_to_pillar = isset($settings['supports_to_pillar']) ? $settings['supports_to_pillar'] : true;
+        
+        // If current post is a support post
+        if ($post->ID != $silo->pillar_post_id) {
+            // Link to pillar (hub structure) - if enabled
+            if ($supports_to_pillar) {
+                $anchor_text = $this->get_anchor_text($post->ID, $pillar_post->ID, $settings);
+                $anchor_variations = $this->get_anchor_variations($post->ID, $pillar_post->ID, $settings);
+                
+                if ($anchor_text) {
+                    $previews[] = array(
+                        'target_post_id' => $pillar_post->ID,
+                        'target_title' => $pillar_post->post_title,
+                        'anchor_text' => $anchor_text,
+                        'anchor_variations' => $anchor_variations,
+                        'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
+                    );
+                }
+            }
+            
+            // Find current post position
+            $current_index = -1;
+            foreach ($silo_posts as $index => $sp) {
+                if ($sp->post_id == $post->ID) {
+                    $current_index = $index;
+                    break;
+                }
+            }
+            
+            if ($current_index !== -1) {
+                // Link to next post (chain structure)
+                if ($current_index < count($silo_posts) - 1) {
+                    $next_post = get_post($silo_posts[$current_index + 1]->post_id);
+                    if ($next_post) {
+                        $anchor_text = $this->get_anchor_text($post->ID, $next_post->ID, $settings);
+                        $anchor_variations = $this->get_anchor_variations($post->ID, $next_post->ID, $settings);
+                        
+                        if ($anchor_text) {
+                            $previews[] = array(
+                                'target_post_id' => $next_post->ID,
+                                'target_title' => $next_post->post_title,
+                                'anchor_text' => $anchor_text,
+                                'anchor_variations' => $anchor_variations,
+                                'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
+                            );
+                        }
+                    }
+                }
+                
+                // Link to previous post (chain structure)
+                if ($current_index > 0) {
+                    $prev_post = get_post($silo_posts[$current_index - 1]->post_id);
+                    if ($prev_post) {
+                        $anchor_text = $this->get_anchor_text($post->ID, $prev_post->ID, $settings);
+                        $anchor_variations = $this->get_anchor_variations($post->ID, $prev_post->ID, $settings);
+                        
+                        if ($anchor_text) {
+                            $previews[] = array(
+                                'target_post_id' => $prev_post->ID,
+                                'target_title' => $prev_post->post_title,
+                                'anchor_text' => $anchor_text,
+                                'anchor_variations' => $anchor_variations,
+                                'insertion_point' => $this->find_insertion_point($post->ID, $anchor_text)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        
+        return $previews;
+    }
+    
+    /**
+     * Preview AI-contextual links
+     */
+    private function preview_ai_contextual_links($silo_id, $post, $silo, $silo_posts, $settings) {
+        $previews = array();
+        $pillar_post = get_post($silo->pillar_post_id);
+        
+        // Get all posts for similarity calculation
+        $all_posts = array();
+        $all_posts[] = $pillar_post;
+        foreach ($silo_posts as $silo_post) {
+            $p = get_post($silo_post->post_id);
+            if ($p) {
+                $all_posts[] = $p;
+            }
+        }
+        
+        // Find most related posts for current post
+        $max_links = $settings['max_contextual_links'] ?? 3;
+        $related_posts = $this->find_most_related_posts($post, $all_posts, $max_links);
+        
+        foreach ($related_posts as $target_post) {
             if ($target_post->ID == $post->ID) {
                 continue;
             }

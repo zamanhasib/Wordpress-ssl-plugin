@@ -43,6 +43,18 @@ class SSP_Ajax_Handler {
         add_action('wp_ajax_ssp_save_pattern', array($this, 'save_pattern'));
         add_action('wp_ajax_ssp_load_pattern', array($this, 'load_pattern'));
         add_action('wp_ajax_ssp_delete_pattern', array($this, 'delete_pattern'));
+        add_action('wp_ajax_ssp_get_debug_report', array($this, 'get_debug_report'));
+        add_action('wp_ajax_ssp_download_debug_report', array($this, 'download_debug_report'));
+        add_action('wp_ajax_ssp_clear_debug_logs', array($this, 'clear_debug_logs'));
+        
+        // Anchor Report
+        add_action('wp_ajax_ssp_get_anchor_report', array($this, 'get_anchor_report'));
+        add_action('wp_ajax_ssp_get_anchor_details', array($this, 'get_anchor_details'));
+        add_action('wp_ajax_ssp_save_anchor_settings', array($this, 'save_anchor_settings'));
+        add_action('wp_ajax_ssp_export_anchor_report', array($this, 'export_anchor_report'));
+        
+        // Troubleshoot
+        add_action('wp_ajax_ssp_check_tables', array($this, 'check_tables'));
     }
     
     /**
@@ -105,10 +117,11 @@ class SSP_Ajax_Handler {
             'use_ai_anchors' => isset($_POST['use_ai_anchors']),
             'auto_link' => isset($_POST['auto_link']),
             'auto_update' => isset($_POST['auto_update']),
+            'supports_to_pillar' => isset($_POST['supports_to_pillar']),
             'pillar_to_supports' => isset($_POST['pillar_to_supports']),
             'max_pillar_links' => intval($_POST['max_pillar_links'] ?? 5),
             'max_contextual_links' => intval($_POST['max_contextual_links'] ?? 3),
-            'placement_type' => get_option('ssp_settings')['link_placement'] ?? 'inline',
+            'placement_type' => sanitize_text_field($_POST['link_placement'] ?? 'natural'),
             'auto_assign_category' => isset($_POST['auto_assign_category']),
             'auto_assign_category_id' => intval($_POST['auto_assign_category_id'] ?? 0)
         );
@@ -196,23 +209,61 @@ class SSP_Ajax_Handler {
                     exit;
             }
             
-            if (!empty($results) && !isset($results['error'])) {
-                $silo_id = $results['silo_id'] ?? null;
-                $pillar_post_id = $results['pillar_post_id'] ?? null;
-                $support_posts_count = count($results['support_posts'] ?? []);
+            // Handle results based on setup method
+            if ($setup_method === 'manual') {
+                // Manual returns array of results (one per pillar)
+                $success_count = 0;
+                $total_support_posts = 0;
+                $silo_ids = array();
                 
-                wp_send_json_success(array(
-                    'message' => 'Silo created successfully!',
-                    'silo_id' => $silo_id,
-                    'pillar_post_id' => $pillar_post_id,
-                    'support_posts_count' => $support_posts_count
-                ));
+                foreach ($results as $result) {
+                    if (isset($result['silo_id'])) {
+                        $success_count++;
+                        $total_support_posts += count($result['support_posts'] ?? []);
+                        $silo_ids[] = $result['silo_id'];
+                    }
+                }
+                
+                if ($success_count > 0) {
+                    wp_send_json_success(array(
+                        'message' => "Created {$success_count} silo(s) successfully!",
+                        'silos_created' => $success_count,
+                        'silo_ids' => $silo_ids,
+                        'total_support_posts' => $total_support_posts
+                    ));
+                } else {
+                    wp_send_json_error('Failed to create silos');
+                    exit;
+                }
             } else {
-                wp_send_json_error($results['error'] ?? 'Failed to create silo');
+                // AI and Category methods also return array of results
+                if (!empty($results) && is_array($results)) {
+                    $first_result = $results[0] ?? array();
+                    
+                    if (isset($first_result['error'])) {
+                        wp_send_json_error($first_result['error']);
+                        exit;
+                    } elseif (isset($first_result['silo_id'])) {
+                        $success_count = count(array_filter($results, function($r) { return isset($r['silo_id']); }));
+                        wp_send_json_success(array(
+                            'message' => "Created {$success_count} silo(s) successfully!",
+                            'silos_created' => $success_count,
+                            'results' => $results
+                        ));
+                        exit;
+                    } else {
+                        wp_send_json_error('Failed to create silo');
+                        exit;
+                    }
+                } else {
+                    wp_send_json_error('No results returned');
+                    exit;
+                }
             }
             
         } catch (Exception $e) {
             wp_send_json_error('Error: ' . esc_html($e->getMessage()));
+            exit;
         }
     }
     
@@ -349,8 +400,22 @@ class SSP_Ajax_Handler {
                 }
             }
         } else {
-            // Remove all links for silo
+            // Remove all links for silo (from support posts AND pillar post)
             global $wpdb;
+            
+            // Get silo details to get pillar post ID
+            $silo = SSP_Database::get_silo($silo_id);
+            if (!$silo) {
+                wp_send_json_error('Silo not found');
+                exit;
+            }
+            
+            // Remove links from pillar post first
+            if ($link_engine->remove_existing_links($silo->pillar_post_id, $silo_id)) {
+                $removed_count++;
+            }
+            
+            // Remove links from all support posts
             $silo_posts = SSP_Database::get_silo_posts($silo_id);
             foreach ($silo_posts as $silo_post) {
                 if ($link_engine->remove_existing_links($silo_post->post_id, $silo_id)) {
@@ -611,6 +676,61 @@ class SSP_Ajax_Handler {
     }
     
     /**
+     * Check database tables
+     */
+    public function check_tables() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        global $wpdb;
+        
+        $required_tables = array(
+            'ssp_silos',
+            'ssp_silo_posts',
+            'ssp_links',
+            'ssp_ai_suggestions',
+            'ssp_excluded_items',
+            'ssp_logs'
+        );
+        
+        $results = array();
+        $all_exist = true;
+        
+        foreach ($required_tables as $table_suffix) {
+            $table_name = $wpdb->prefix . $table_suffix;
+            $table_exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table_name)) === $table_name;
+            
+            $results[] = array(
+                'table' => $table_name,
+                'exists' => $table_exists,
+                'status' => $table_exists ? 'OK' : 'MISSING'
+            );
+            
+            if (!$table_exists) {
+                $all_exist = false;
+            }
+        }
+        
+        if ($all_exist) {
+            wp_send_json_success(array(
+                'message' => '✅ All database tables exist and are properly configured!',
+                'tables' => $results,
+                'all_exist' => true
+            ));
+        } else {
+            wp_send_json_success(array(
+                'message' => '⚠️ Some tables are missing. Click "Recreate Tables" to fix.',
+                'tables' => $results,
+                'all_exist' => false
+            ));
+        }
+    }
+    
+    /**
      * Get AI recommendations for pillar posts (without creating silo)
      */
     public function get_ai_recommendations() {
@@ -815,6 +935,356 @@ class SSP_Ajax_Handler {
         update_option('ssp_saved_patterns', $saved_patterns);
         
         wp_send_json_success('Pattern deleted successfully');
+    }
+    
+    /**
+     * Get debug report
+     */
+    public function get_debug_report() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        global $wpdb;
+        $logs_table = $wpdb->prefix . 'ssp_logs';
+        
+        // Get last 100 log entries
+        $logs = $wpdb->get_results(
+            "SELECT * FROM `{$logs_table}` ORDER BY created_at DESC LIMIT 100",
+            ARRAY_A
+        );
+        
+        if ($logs) {
+            wp_send_json_success(array('logs' => $logs));
+        } else {
+            wp_send_json_success(array('logs' => array(), 'message' => 'No logs found'));
+        }
+    }
+    
+    /**
+     * Download debug report as text file
+     */
+    public function download_debug_report() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_die('Insufficient permissions');
+        }
+        
+        global $wpdb;
+        $logs_table = $wpdb->prefix . 'ssp_logs';
+        
+        // Get all logs
+        $logs = $wpdb->get_results(
+            "SELECT * FROM `{$logs_table}` ORDER BY created_at DESC",
+            ARRAY_A
+        );
+        
+        // Generate report text
+        $report = "SEMANTIC SILO PRO - DEBUG REPORT\n";
+        $report .= "Generated: " . current_time('mysql') . "\n";
+        $report .= "WordPress Version: " . get_bloginfo('version') . "\n";
+        $report .= "Plugin Version: " . SSP_VERSION . "\n";
+        $report .= "PHP Version: " . PHP_VERSION . "\n";
+        $report .= "=" . str_repeat("=", 70) . "\n\n";
+        
+        if (!empty($logs)) {
+            foreach ($logs as $log) {
+                $report .= "[" . $log['created_at'] . "] ";
+                $report .= strtoupper($log['level']) . ": ";
+                $report .= $log['message'];
+                if (!empty($log['context'])) {
+                    $report .= " | Context: " . $log['context'];
+                }
+                $report .= "\n";
+            }
+        } else {
+            $report .= "No logs found.\n";
+        }
+        
+        // Send as downloadable file
+        header('Content-Type: text/plain');
+        header('Content-Disposition: attachment; filename="semantic-silo-pro-debug-' . date('Y-m-d-His') . '.txt"');
+        header('Content-Length: ' . strlen($report));
+        echo $report;
+        exit;
+    }
+    
+    /**
+     * Clear all debug logs
+     */
+    public function clear_debug_logs() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        global $wpdb;
+        $logs_table = $wpdb->prefix . 'ssp_logs';
+        
+        $result = $wpdb->query("TRUNCATE TABLE `{$logs_table}`");
+        
+        if ($result !== false) {
+            wp_send_json_success('Debug logs cleared successfully');
+        } else {
+            wp_send_json_error('Failed to clear logs');
+        }
+    }
+    
+    /**
+     * Get anchor report data
+     */
+    public function get_anchor_report() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        $silo_id = !empty($_POST['silo_id']) ? intval($_POST['silo_id']) : null;
+        $status_filter = isset($_POST['status_filter']) ? sanitize_text_field($_POST['status_filter']) : 'all';
+        
+        // Get anchor statistics
+        $anchors = SSP_Database::get_anchor_statistics($silo_id);
+        $total_links = SSP_Database::get_total_links_count($silo_id);
+        
+        // Get settings
+        $settings = get_option('ssp_anchor_settings', array(
+            'max_usage_per_anchor' => 10,
+            'warning_threshold' => 7
+        ));
+        
+        // Handle empty results
+        if (empty($anchors)) {
+            wp_send_json_success(array(
+                'anchors' => array(),
+                'stats' => array(
+                    'total' => 0,
+                    'healthy' => 0,
+                    'warning' => 0,
+                    'danger' => 0
+                ),
+                'total_links' => 0,
+                'settings' => $settings
+            ));
+            return;
+        }
+        
+        $processed_anchors = array();
+        $stats = array(
+            'total' => 0,
+            'healthy' => 0,
+            'warning' => 0,
+            'danger' => 0
+        );
+        
+        foreach ($anchors as $anchor) {
+            $usage_count = intval($anchor->usage_count);
+            $percentage = $total_links > 0 ? ($usage_count / $total_links) * 100 : 0;
+            
+            // Determine status
+            if ($usage_count >= intval($settings['max_usage_per_anchor'])) {
+                $status = 'danger';
+                $status_label = '🔴 Over-used';
+                $stats['danger']++;
+            } elseif ($usage_count >= intval($settings['warning_threshold'])) {
+                $status = 'warning';
+                $status_label = '⚠️ Warning';
+                $stats['warning']++;
+            } else {
+                $status = 'good';
+                $status_label = '✅ Healthy';
+                $stats['healthy']++;
+            }
+            
+            $stats['total']++;
+            
+            // Apply status filter
+            if ($status_filter !== 'all' && $status !== $status_filter) {
+                continue;
+            }
+            
+            // Calculate health score (0-100)
+            $max_usage = intval($settings['max_usage_per_anchor']);
+            if ($max_usage > 0) {
+                $health_score = max(0, 100 - (($usage_count / $max_usage) * 100));
+            } else {
+                $health_score = 100; // If no limit set, consider healthy
+            }
+            
+            // Get post IDs
+            $post_ids = !empty($anchor->post_ids) ? explode(',', $anchor->post_ids) : array();
+            
+            $processed_anchors[] = array(
+                'anchor_text' => $anchor->anchor_text,
+                'usage_count' => $usage_count,
+                'percentage' => round($percentage, 2),
+                'status' => $status,
+                'status_label' => $status_label,
+                'health_score' => round($health_score, 0),
+                'post_ids' => !empty($post_ids) ? array_map('intval', $post_ids) : array(),
+                'post_count' => count($post_ids),
+                'first_used' => $anchor->first_used,
+                'last_used' => $anchor->last_used
+            );
+        }
+        
+        wp_send_json_success(array(
+            'anchors' => $processed_anchors,
+            'stats' => $stats,
+            'total_links' => $total_links,
+            'settings' => $settings
+        ));
+    }
+    
+    /**
+     * Get anchor details
+     */
+    public function get_anchor_details() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        $anchor_text = isset($_POST['anchor_text']) ? sanitize_text_field($_POST['anchor_text']) : '';
+        $silo_id = !empty($_POST['silo_id']) ? intval($_POST['silo_id']) : null;
+        
+        if (empty($anchor_text)) {
+            wp_send_json_error('Anchor text is required');
+            exit;
+        }
+        
+        $details = SSP_Database::get_anchor_usage_details($anchor_text, $silo_id);
+        
+        $formatted_details = array();
+        foreach ($details as $detail) {
+            $source_post = get_post($detail->source_post_id);
+            $target_post = get_post($detail->target_post_id);
+            
+            $formatted_details[] = array(
+                'id' => $detail->id,
+                'source_post_id' => $detail->source_post_id,
+                'source_post_title' => $source_post ? $source_post->post_title : 'Unknown',
+                'source_post_url' => $source_post ? get_permalink($source_post) : '',
+                'target_post_id' => $detail->target_post_id,
+                'target_post_title' => $target_post ? $target_post->post_title : 'Unknown',
+                'target_post_url' => $target_post ? get_permalink($target_post) : '',
+                'silo_name' => $detail->silo_name,
+                'created_at' => $detail->created_at
+            );
+        }
+        
+        wp_send_json_success(array(
+            'anchor_text' => $anchor_text,
+            'details' => $formatted_details,
+            'total' => count($formatted_details)
+        ));
+    }
+    
+    /**
+     * Save anchor settings
+     */
+    public function save_anchor_settings() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        $max_usage = intval($_POST['max_usage_per_anchor'] ?? 10);
+        $warning_threshold = intval($_POST['warning_threshold'] ?? 7);
+        
+        // Validate settings
+        if ($max_usage < 1) {
+            wp_send_json_error('Max usage must be at least 1');
+            exit;
+        }
+        
+        if ($warning_threshold < 1) {
+            wp_send_json_error('Warning threshold must be at least 1');
+            exit;
+        }
+        
+        if ($warning_threshold > $max_usage) {
+            wp_send_json_error('Warning threshold cannot exceed max usage');
+            exit;
+        }
+        
+        $settings = array(
+            'max_usage_per_anchor' => $max_usage,
+            'warning_threshold' => $warning_threshold
+        );
+        
+        update_option('ssp_anchor_settings', $settings);
+        
+        wp_send_json_success('Settings saved successfully');
+    }
+    
+    /**
+     * Export anchor report as CSV
+     */
+    public function export_anchor_report() {
+        $this->verify_nonce();
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+            exit;
+        }
+        
+        $silo_id = !empty($_POST['silo_id']) ? intval($_POST['silo_id']) : null;
+        
+        $anchors = SSP_Database::get_anchor_statistics($silo_id);
+        $total_links = SSP_Database::get_total_links_count($silo_id);
+        
+        $settings = get_option('ssp_anchor_settings', array(
+            'max_usage_per_anchor' => 10,
+            'warning_threshold' => 7
+        ));
+        
+        $csv_data = array();
+        $csv_data[] = array('Anchor Text', 'Usage Count', 'Percentage', 'Status', 'Health Score', 'First Used', 'Last Used');
+        
+        foreach ($anchors as $anchor) {
+            $usage_count = intval($anchor->usage_count);
+            $percentage = $total_links > 0 ? ($usage_count / $total_links) * 100 : 0;
+            
+            if ($usage_count >= intval($settings['max_usage_per_anchor'])) {
+                $status = 'Over-used';
+            } elseif ($usage_count >= intval($settings['warning_threshold'])) {
+                $status = 'Warning';
+            } else {
+                $status = 'Healthy';
+            }
+            
+            // Calculate health score with division by zero protection
+            $max_usage = intval($settings['max_usage_per_anchor']);
+            if ($max_usage > 0) {
+                $health_score = max(0, 100 - (($usage_count / $max_usage) * 100));
+            } else {
+                $health_score = 100;
+            }
+            
+            $csv_data[] = array(
+                $anchor->anchor_text,
+                $usage_count,
+                round($percentage, 2) . '%',
+                $status,
+                round($health_score, 0) . '%',
+                $anchor->first_used,
+                $anchor->last_used
+            );
+        }
+        
+        wp_send_json_success(array('csv_data' => $csv_data));
     }
     
     /**

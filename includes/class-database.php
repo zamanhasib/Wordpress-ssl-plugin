@@ -106,7 +106,7 @@ class SSP_Database {
             target_post_id bigint(20) NOT NULL,
             anchor_text varchar(500) NOT NULL,
             link_position int(11) DEFAULT 0,
-            placement_type varchar(20) DEFAULT 'inline',
+            placement_type varchar(20) DEFAULT 'natural',
             ai_generated tinyint(1) DEFAULT 0,
             status varchar(20) DEFAULT 'active',
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
@@ -420,7 +420,7 @@ class SSP_Database {
             'target_post_id' => intval($data['target_post_id']),
             'anchor_text' => sanitize_text_field($data['anchor_text']),
             'link_position' => intval($data['link_position'] ?? 0),
-            'placement_type' => sanitize_text_field($data['placement_type'] ?? 'inline'),
+            'placement_type' => sanitize_text_field($data['placement_type'] ?? 'natural'),
             'ai_generated' => intval($data['ai_generated'] ?? 0)
         );
         
@@ -503,4 +503,106 @@ class SSP_Database {
             $params
         ));
     }
+    
+    /**
+     * Get anchor text statistics
+     */
+    public static function get_anchor_statistics($silo_id = null) {
+        global $wpdb;
+        
+        $table = $wpdb->prefix . 'ssp_links';
+        
+        $where = "status = 'active'";
+        $params = array();
+        
+        if ($silo_id) {
+            $where .= " AND silo_id = %d";
+            $params[] = $silo_id;
+        }
+        
+        $query = "SELECT 
+            anchor_text,
+            COUNT(*) as usage_count,
+            GROUP_CONCAT(DISTINCT source_post_id ORDER BY source_post_id) as post_ids,
+            MIN(created_at) as first_used,
+            MAX(created_at) as last_used
+        FROM $table 
+        WHERE $where
+        GROUP BY anchor_text
+        ORDER BY usage_count DESC";
+        
+        if (!empty($params)) {
+            $results = $wpdb->get_results($wpdb->prepare($query, $params));
+        } else {
+            $results = $wpdb->get_results($query);
+        }
+        
+        return $results;
+    }
+    
+    /**
+     * Get total link count for percentage calculations
+     */
+    public static function get_total_links_count($silo_id = null) {
+        global $wpdb;
+        
+        $table = $wpdb->prefix . 'ssp_links';
+        
+        if ($silo_id) {
+            return $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM $table WHERE status = 'active' AND silo_id = %d",
+                $silo_id
+            ));
+        }
+        
+        return $wpdb->get_var("SELECT COUNT(*) FROM $table WHERE status = 'active'");
+    }
+    
+    /**
+     * Get posts where anchor is used
+     */
+    public static function get_anchor_usage_details($anchor_text, $silo_id = null) {
+        global $wpdb;
+        
+        $table = $wpdb->prefix . 'ssp_links';
+        
+        $where = "anchor_text = %s AND status = 'active'";
+        $params = array($anchor_text);
+        
+        if ($silo_id) {
+            $where .= " AND silo_id = %d";
+            $params[] = $silo_id;
+        }
+        
+        $query = "SELECT 
+            l.id,
+            l.source_post_id,
+            l.target_post_id,
+            l.silo_id,
+            l.created_at,
+            s.name as silo_name
+        FROM $table l
+        LEFT JOIN {$wpdb->prefix}ssp_silos s ON l.silo_id = s.id
+        WHERE $where
+        ORDER BY l.created_at DESC";
+        
+        return $wpdb->get_results($wpdb->prepare($query, $params));
+    }
+    
+    /**
+     * Check if anchor exceeds usage limit
+     */
+    public static function check_anchor_limit($anchor_text, $max_usage) {
+        global $wpdb;
+        
+        $table = $wpdb->prefix . 'ssp_links';
+        
+        $count = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM $table WHERE anchor_text = %s AND status = 'active'",
+            $anchor_text
+        ));
+        
+        return intval($count) >= intval($max_usage);
+    }
 }
+

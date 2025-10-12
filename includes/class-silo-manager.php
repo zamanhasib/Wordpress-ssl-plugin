@@ -337,10 +337,34 @@ class SSP_Silo_Manager {
         }
         
         $silo_posts = SSP_Database::get_silo_posts($silo_id);
-        $silo->settings = json_decode($silo->settings, true);
-        $silo->posts = $silo_posts;
+        $pillar_post = get_post($silo->pillar_post_id);
         
-        return $silo;
+        // Format posts with link counts
+        $formatted_posts = array();
+        foreach ($silo_posts as $silo_post) {
+            $post = get_post($silo_post->post_id);
+            if ($post) {
+                $link_count = count(SSP_Database::get_post_links($silo_post->post_id, $silo_id));
+                $formatted_posts[] = array(
+                    'id' => $post->ID,
+                    'title' => $post->post_title,
+                    'link_count' => $link_count
+                );
+            }
+        }
+        
+        $total_links = SSP_Database::get_silo_link_count($silo_id);
+        
+        return array(
+            'name' => $silo->name,
+            'pillar_id' => $silo->pillar_post_id,
+            'pillar_title' => $pillar_post ? $pillar_post->post_title : 'N/A',
+            'setup_method' => ucfirst(str_replace('_', ' ', $silo->setup_method)),
+            'linking_mode' => ucfirst(str_replace('_', ' ', $silo->linking_mode)),
+            'posts' => $formatted_posts,
+            'total_links' => $total_links,
+            'created_at' => date('Y-m-d H:i', strtotime($silo->created_at))
+        );
     }
     
     /**

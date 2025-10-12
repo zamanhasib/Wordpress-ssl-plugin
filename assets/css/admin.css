@@ -796,3 +796,113 @@
 .exclusions-list table {
     margin-top: 10px;
 }
+
+/* Debug Report */
+.debug-report-table {
+    margin-top: 15px;
+    background: #fff;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.log-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.log-badge-info {
+    background: #0073aa;
+}
+
+.log-badge-warning {
+    background: #ffb900;
+}
+
+.log-badge-error {
+    background: #dc3232;
+}
+
+.log-badge-debug {
+    background: #666;
+}
+
+.log-error {
+    background-color: #ffebee;
+}
+
+.log-warning {
+    background-color: #fff8e1;
+}
+
+/* Anchor Report Styles */
+.ssp-anchor-report {
+    padding: 20px;
+}
+
+.ssp-anchor-report .ssp-form-section {
+    margin-bottom: 20px;
+}
+
+#anchor-report-table {
+    margin-top: 20px;
+}
+
+#anchor-report-table thead th {
+    background: #f5f5f5;
+    font-weight: 600;
+}
+
+#anchor-report-table tbody tr:hover {
+    background: #f9f9f9;
+}
+
+#anchor-details-modal .ssp-modal-content {
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+#anchor-details-modal table {
+    margin-top: 15px;
+}
+
+.anchor-health-bar {
+    position: relative;
+    background: #f0f0f0;
+    border-radius: 5px;
+    height: 20px;
+    overflow: hidden;
+}
+
+.anchor-health-bar-fill {
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+.anchor-health-bar-text {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    line-height: 20px;
+    font-size: 11px;
+    font-weight: bold;
+    color: #333;
+}
+
+.view-anchor-details {
+    cursor: pointer;
+}
+
+.view-anchor-details:hover {
+    background: #0073aa;
+    color: white;
+    border-color: #0073aa;
+}
