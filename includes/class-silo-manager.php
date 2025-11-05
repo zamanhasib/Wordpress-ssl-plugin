@@ -53,7 +53,8 @@ class SSP_Silo_Manager {
             // Get AI recommendations
             $recommended_posts = $this->ai_integration->get_relevant_posts($pillar_post_id, 20);
             
-            if (empty($recommended_posts)) {
+            // Check if we got valid recommendations (not false and not empty)
+            if ($recommended_posts === false || empty($recommended_posts) || !is_array($recommended_posts)) {
                 continue;
             }
             
@@ -355,6 +356,21 @@ class SSP_Silo_Manager {
         
         $total_links = SSP_Database::get_silo_link_count($silo_id);
         
+        // Decode and format settings
+        $settings = json_decode($silo->settings, true);
+        if (!is_array($settings)) {
+            $settings = array();
+        }
+        
+        // Get category name if applicable
+        $category_name = 'N/A';
+        if ($silo->setup_method === 'category_based' && isset($settings['category_id'])) {
+            $category = get_category($settings['category_id']);
+            if ($category) {
+                $category_name = $category->name;
+            }
+        }
+        
         return array(
             'name' => $silo->name,
             'pillar_id' => $silo->pillar_post_id,
@@ -363,7 +379,9 @@ class SSP_Silo_Manager {
             'linking_mode' => ucfirst(str_replace('_', ' ', $silo->linking_mode)),
             'posts' => $formatted_posts,
             'total_links' => $total_links,
-            'created_at' => date('Y-m-d H:i', strtotime($silo->created_at))
+            'created_at' => date('Y-m-d H:i', strtotime($silo->created_at)),
+            'settings' => $settings,
+            'category_name' => $category_name
         );
     }
     
@@ -373,17 +391,48 @@ class SSP_Silo_Manager {
     public function delete_silo($silo_id) {
         global $wpdb;
         
-        // Remove links first
-        $wpdb->delete($wpdb->prefix . 'ssp_links', array('silo_id' => $silo_id));
+        // Get silo details before deletion for content cleanup
+        $silo = SSP_Database::get_silo($silo_id);
+        if (!$silo) {
+            return false;
+        }
         
-        // Remove silo posts
-        $wpdb->delete($wpdb->prefix . 'ssp_silo_posts', array('silo_id' => $silo_id));
+        // Get all posts that have links (support posts + pillar post)
+        $silo_posts = $wpdb->get_results($wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->prefix}ssp_silo_posts WHERE silo_id = %d",
+            $silo_id
+        ));
         
-        // Remove AI suggestions
-        $wpdb->delete($wpdb->prefix . 'ssp_ai_suggestions', array('silo_id' => $silo_id));
+        // Get pillar post if it exists
+        $all_post_ids = array();
+        if (!empty($silo->pillar_post_id) && intval($silo->pillar_post_id) > 0) {
+            $all_post_ids[] = intval($silo->pillar_post_id);
+        }
         
-        // Remove silo
-        $result = $wpdb->delete($wpdb->prefix . 'ssp_silos', array('id' => $silo_id));
+        // Add support post IDs
+        foreach ($silo_posts as $silo_post) {
+            $post_id = intval($silo_post->post_id);
+            if ($post_id > 0 && !in_array($post_id, $all_post_ids)) {
+                $all_post_ids[] = $post_id;
+            }
+        }
+        
+        // Remove links from post content (must do before database deletion)
+        if (!empty($all_post_ids)) {
+            $link_engine = SSP_Link_Engine::get_instance();
+            foreach ($all_post_ids as $post_id) {
+                // Remove links from post content for this silo only
+                $link_engine->remove_existing_links($post_id, $silo_id);
+            }
+        }
+        
+        // Delete related data from database
+        $wpdb->delete($wpdb->prefix . 'ssp_links', array('silo_id' => $silo_id), array('%d'));
+        $wpdb->delete($wpdb->prefix . 'ssp_silo_posts', array('silo_id' => $silo_id), array('%d'));
+        $wpdb->delete($wpdb->prefix . 'ssp_ai_suggestions', array('silo_id' => $silo_id), array('%d'));
+        
+        // Delete the silo itself
+        $result = $wpdb->delete($wpdb->prefix . 'ssp_silos', array('id' => $silo_id), array('%d'));
         
         return $result !== false;
     }

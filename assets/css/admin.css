@@ -709,11 +709,11 @@
     background: #fff;
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-    max-width: 900px;
-    width: 90%;
+    max-width: 960px;
+    width: 92%;
     max-height: 80vh;
-    overflow-y: auto;
-    padding: 30px;
+    display: flex;
+    flex-direction: column;
     position: relative;
 }
 
@@ -726,10 +726,125 @@
     color: #666;
     cursor: pointer;
     line-height: 1;
+    background: none;
+    border: none;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s ease;
+}
+
+.ssp-modal-header {
+    position: relative;
+    background: #fff;
+    padding: 20px 30px 10px 30px;
+    padding-right: 60px;
+    border-bottom: 1px solid #eee;
+    flex-shrink: 0;
+}
+
+.ssp-modal-header h2 {
+    margin: 0;
+    padding-right: 40px;
+}
+
+.ssp-modal-body {
+    padding: 20px 30px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+}
+
+.ssp-modal-footer {
+    background: #fff;
+    padding: 12px 30px;
+    border-top: 1px solid #eee;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.ssp-silo-modal .silo-info {
+    margin-bottom: 25px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #eee;
+}
+
+.ssp-silo-modal .silo-info h3 {
+    margin: 0 0 15px 0;
+    font-size: 16px;
+    color: #0073aa;
+}
+
+.ssp-silo-modal .silo-info p {
+    margin: 6px 0;
+}
+
+.ssp-silo-modal .silo-settings {
+    margin-bottom: 25px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #eee;
+}
+
+.ssp-silo-modal .silo-settings h3 {
+    margin: 0 0 15px 0;
+    font-size: 16px;
+    color: #0073aa;
+}
+
+.ssp-silo-modal table.wp-list-table {
+    margin-top: 10px;
+}
+
+.ssp-silo-modal .silo-settings table.wp-list-table td {
+    vertical-align: middle;
+}
+
+.ssp-silo-modal .silo-settings ul {
+    list-style-type: disc;
+    padding-left: 20px;
+}
+
+.ssp-silo-modal .silo-settings ul li {
+    margin: 5px 0;
+    font-family: monospace;
+    font-size: 13px;
 }
 
 .ssp-modal-close:hover {
     color: #000;
+}
+
+/* Modal enhancements */
+.ssp-badge {
+    display: inline-block;
+    font-size: 11px;
+    line-height: 1;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-weight: 600;
+}
+.ssp-badge-primary { background: #e6f0f7; color: #055a8c; border: 1px solid #b9d4ec; }
+.ssp-badge-info { background: #eef7ee; color: #216e39; border: 1px solid #cce8cf; }
+.ssp-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+.ssp-table-tools {
+    display: flex;
+    justify-content: flex-end;
+    margin: 10px 0;
+}
+.ssp-table-tools input[type="search"] {
+    max-width: 260px;
+    width: 100%;
+}
+
+.ssp-actions .button {
+    margin-right: 6px;
+}
+.ssp-actions .button:last-child {
+    margin-right: 0;
 }
 
 .ssp-recommendation-group {
@@ -864,8 +979,15 @@
 }
 
 #anchor-details-modal .ssp-modal-content {
-    max-height: 80vh;
+    max-width: 900px;
+    width: 92%;
+}
+
+#anchor-details-modal .ssp-modal-body {
+    padding: 20px 30px;
     overflow-y: auto;
+    flex: 1;
+    min-height: 0;
 }
 
 #anchor-details-modal table {
@@ -905,4 +1027,295 @@
     background: #0073aa;
     color: white;
     border-color: #0073aa;
+}
+
+/* Orphan Posts Table Styling */
+.ssp-orphan-posts {
+    margin-top: 20px;
+}
+
+.ssp-orphan-posts .wp-list-table {
+    margin-top: 15px;
+    border-collapse: collapse;
+    table-layout: auto;
+    width: 100%;
+}
+
+/* Ensure Title column links are readable and clickable */
+.ssp-orphan-posts .wp-list-table tbody td:nth-child(4) a {
+    color: #0073aa;
+    text-decoration: none;
+    font-weight: 600;
+    display: inline-block;
+    max-width: 100%;
+}
+
+.ssp-orphan-posts .wp-list-table tbody td:nth-child(4) a:hover {
+    color: #005177;
+    text-decoration: underline;
+}
+
+.ssp-orphan-posts .wp-list-table thead th {
+    background: #f5f5f5;
+    font-weight: 600;
+    padding: 12px;
+    border-bottom: 2px solid #ddd;
+}
+
+.ssp-orphan-posts .wp-list-table tbody tr {
+    transition: background-color 0.2s ease;
+}
+
+.ssp-orphan-posts .wp-list-table tbody tr:hover {
+    background: #f9f9f9;
+}
+
+.ssp-orphan-posts .wp-list-table tbody td {
+    padding: 12px;
+    vertical-align: middle;
+    overflow: visible;
+}
+
+/* Title column - make it flexible with proper word wrapping */
+.ssp-orphan-posts .wp-list-table tbody td:nth-child(4) {
+    min-width: 300px;
+    max-width: none;
+    word-wrap: break-word;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+
+.ssp-orphan-posts .wp-list-table tbody td:last-child {
+    overflow: visible;
+    white-space: nowrap;
+}
+
+.ssp-orphan-posts .orphan-post-checkbox {
+    margin: 0;
+    cursor: pointer;
+}
+
+.ssp-orphan-posts .post-type-badge {
+    display: inline-block;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+/* Type column - ensure badge fits */
+.ssp-orphan-posts .wp-list-table tbody td:nth-child(3) {
+    min-width: 100px;
+    white-space: nowrap;
+}
+
+.ssp-orphan-posts .ssp-orphan-actions {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: nowrap;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+}
+
+.ssp-orphan-posts .assign-single-orphan-silo {
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    padding: 5px 8px;
+    font-size: 12px;
+    margin: 0;
+    flex: 1 1 160px;
+    min-width: 140px;
+    max-width: 180px;
+    width: auto;
+}
+
+.ssp-orphan-posts .assign-single-orphan-btn {
+    margin: 0;
+    padding: 4px 10px;
+    font-size: 12px;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: auto;
+}
+
+.ssp-orphan-posts .ssp-orphan-actions .button {
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 4px 8px;
+    font-size: 12px;
+    min-width: auto;
+}
+
+.ssp-orphan-posts .ssp-orphan-actions a.button {
+    display: inline-block;
+    text-decoration: none;
+}
+
+.ssp-orphan-posts .assign-single-orphan-btn:hover {
+    background: #005177;
+    border-color: #005177;
+    transform: translateY(-1px);
+}
+
+.ssp-orphan-posts tbody tr[data-post-id] {
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-5px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Loading state for table rows */
+.ssp-orphan-posts tbody tr.fade-out {
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+/* Alert/Toast Notification Styles */
+.ssp-alert {
+    position: fixed;
+    top: 32px;
+    right: 20px;
+    max-width: 400px;
+    min-width: 300px;
+    z-index: 100000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border-radius: 4px;
+    opacity: 0;
+    transform: translateX(400px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+}
+
+.ssp-alert.ssp-alert-show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.ssp-alert-content {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    gap: 12px;
+    position: relative;
+}
+
+.ssp-alert-icon {
+    font-size: 18px;
+    font-weight: bold;
+    line-height: 1;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    color: white;
+}
+
+.ssp-alert-message {
+    flex: 1;
+    font-size: 14px;
+    line-height: 1.4;
+    color: #333;
+}
+
+.ssp-alert-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    line-height: 1;
+    color: #666;
+    cursor: pointer;
+    padding: 0;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: color 0.2s ease;
+}
+
+.ssp-alert-close:hover {
+    color: #000;
+}
+
+/* Success Alert */
+.ssp-alert-success {
+    background: #d4edda;
+    border-left: 4px solid #28a745;
+}
+
+.ssp-alert-success .ssp-alert-icon {
+    background: #28a745;
+}
+
+.ssp-alert-success .ssp-alert-message {
+    color: #155724;
+}
+
+/* Error Alert */
+.ssp-alert-error {
+    background: #f8d7da;
+    border-left: 4px solid #dc3545;
+}
+
+.ssp-alert-error .ssp-alert-icon {
+    background: #dc3545;
+}
+
+.ssp-alert-error .ssp-alert-message {
+    color: #721c24;
+}
+
+/* Warning Alert */
+.ssp-alert-warning {
+    background: #fff3cd;
+    border-left: 4px solid #ffc107;
+}
+
+.ssp-alert-warning .ssp-alert-icon {
+    background: #ffc107;
+    color: #856404;
+}
+
+.ssp-alert-warning .ssp-alert-message {
+    color: #856404;
+}
+
+/* Info Alert */
+.ssp-alert-info {
+    background: #d1ecf1;
+    border-left: 4px solid #17a2b8;
+}
+
+.ssp-alert-info .ssp-alert-icon {
+    background: #17a2b8;
+}
+
+.ssp-alert-info .ssp-alert-message {
+    color: #0c5460;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 782px) {
+    .ssp-alert {
+        top: 46px;
+        right: 10px;
+        left: 10px;
+        max-width: none;
+        min-width: auto;
+    }
 }

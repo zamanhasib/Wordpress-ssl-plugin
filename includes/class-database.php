@@ -272,8 +272,8 @@ class SSP_Database {
     public static function create_silo($data) {
         global $wpdb;
         
-        // Validate required fields
-        if (empty($data['name']) || empty($data['pillar_post_id'])) {
+        // Validate required fields - allow pillar_post_id = 0 for no-pillar silos
+        if (empty($data['name']) || !isset($data['pillar_post_id'])) {
             return false;
         }
         
@@ -314,24 +314,39 @@ class SSP_Database {
         $links_table = $wpdb->prefix . 'ssp_links';
         $ai_suggestions_table = $wpdb->prefix . 'ssp_ai_suggestions';
         
+        // Get silo details before deletion for content cleanup
+        $silo = $wpdb->get_row($wpdb->prepare("SELECT pillar_post_id FROM $silo_table WHERE id = %d", $silo_id));
+        
         // Get silo posts before deleting for content cleanup
         $silo_posts = $wpdb->get_results($wpdb->prepare(
             "SELECT post_id FROM $silo_posts_table WHERE silo_id = %d",
             $silo_id
         ));
         
-        // Delete related data first
+        // Collect all post IDs (pillar + support posts)
+        $all_post_ids = array();
+        if ($silo && !empty($silo->pillar_post_id) && intval($silo->pillar_post_id) > 0) {
+            $all_post_ids[] = intval($silo->pillar_post_id);
+        }
+        foreach ($silo_posts as $silo_post) {
+            $post_id = intval($silo_post->post_id);
+            if ($post_id > 0 && !in_array($post_id, $all_post_ids)) {
+                $all_post_ids[] = $post_id;
+            }
+        }
+        
+        // Remove links from post content BEFORE database deletion
+        if (!empty($all_post_ids)) {
+            $link_engine = SSP_Link_Engine::get_instance();
+            foreach ($all_post_ids as $post_id) {
+                $link_engine->remove_existing_links($post_id, $silo_id);
+            }
+        }
+        
+        // Delete related data from database
         $wpdb->delete($silo_posts_table, array('silo_id' => $silo_id), array('%d'));
         $wpdb->delete($links_table, array('silo_id' => $silo_id), array('%d'));
         $wpdb->delete($ai_suggestions_table, array('silo_id' => $silo_id), array('%d'));
-        
-        // Clean up links from post content
-        if (!empty($silo_posts)) {
-            $link_engine = SSP_Link_Engine::get_instance();
-            foreach ($silo_posts as $silo_post) {
-                $link_engine->remove_existing_links($silo_post->post_id, $silo_id);
-            }
-        }
         
         // Delete the silo
         return $wpdb->delete($silo_table, array('id' => $silo_id), array('%d'));
@@ -603,6 +618,200 @@ class SSP_Database {
         ));
         
         return intval($count) >= intval($max_usage);
+    }
+    
+    /**
+     * Get orphan posts (posts not in any silo)
+     */
+    public static function get_orphan_posts($limit = 100, $offset = 0) {
+        global $wpdb;
+        $silo_posts_table = $wpdb->prefix . 'ssp_silo_posts';
+        $silos_table = $wpdb->prefix . 'ssp_silos';
+        $posts_in_silos_sql = "SELECT DISTINCT post_id FROM `" . esc_sql($silo_posts_table) . "`
+                               UNION
+                               SELECT DISTINCT pillar_post_id FROM `" . esc_sql($silos_table) . "`";
+        $posts_in_silos = $wpdb->get_col($posts_in_silos_sql);
+        $posts_in_silos = array_filter(array_map('intval', $posts_in_silos));
+
+        if (empty($posts_in_silos)) {
+            $args = array(
+                'post_type' => array('post', 'page'),
+                'post_status' => 'publish',
+                'numberposts' => $limit > 0 ? $limit : -1,
+                'offset' => $offset,
+                'orderby' => 'post_date',
+                'order' => 'DESC'
+            );
+            $orphan_posts = get_posts($args);
+        } else {
+            $posts_in_silos_int = array_map('intval', $posts_in_silos);
+            $posts_in_silos_int = array_filter($posts_in_silos_int, function($id) { return $id > 0; });
+            
+            if (empty($posts_in_silos_int)) {
+                $args = array(
+                    'post_type' => array('post', 'page'),
+                    'post_status' => 'publish',
+                    'numberposts' => $limit > 0 ? $limit : -1,
+                    'offset' => $offset,
+                    'orderby' => 'post_date',
+                    'order' => 'DESC'
+                );
+                return get_posts($args);
+            }
+            $placeholders = implode(',', array_fill(0, count($posts_in_silos_int), '%d'));
+            $query = $wpdb->prepare(
+                "SELECT ID FROM {$wpdb->posts} 
+                WHERE post_type IN ('post', 'page') 
+                AND post_status = 'publish'
+                AND ID NOT IN ($placeholders)
+                ORDER BY post_date DESC
+                LIMIT %d OFFSET %d",
+                array_merge($posts_in_silos_int, array($limit, $offset))
+            );
+            $orphan_post_ids = $wpdb->get_col($query);
+            if (empty($orphan_post_ids)) { return array(); }
+            $orphan_posts = array();
+            foreach ($orphan_post_ids as $post_id) {
+                $post = get_post($post_id);
+                if ($post) { $orphan_posts[] = $post; }
+            }
+        }
+        return $orphan_posts;
+    }
+    
+    /**
+     * Get count of orphan posts
+     */
+    public static function get_orphan_posts_count() {
+        global $wpdb;
+        $silo_posts_table = $wpdb->prefix . 'ssp_silo_posts';
+        $silos_table = $wpdb->prefix . 'ssp_silos';
+        
+        // Get all post IDs that are in silos (either as support posts or pillar posts)
+        $posts_in_silos_sql = "SELECT DISTINCT post_id FROM `" . esc_sql($silo_posts_table) . "`
+                               UNION
+                               SELECT DISTINCT pillar_post_id FROM `" . esc_sql($silos_table) . "`";
+        $posts_in_silos = $wpdb->get_col($posts_in_silos_sql);
+        $posts_in_silos = array_filter(array_map('intval', $posts_in_silos));
+
+        if (empty($posts_in_silos)) {
+            // No posts in silos, so all published posts/pages are orphans
+            $count = $wpdb->get_var(
+                "SELECT COUNT(*) FROM {$wpdb->posts} 
+                WHERE post_type IN ('post', 'page') 
+                AND post_status = 'publish'"
+            );
+            return intval($count);
+        } else {
+            $posts_in_silos_int = array_map('intval', $posts_in_silos);
+            $posts_in_silos_int = array_filter($posts_in_silos_int, function($id) { return $id > 0; });
+            
+            if (empty($posts_in_silos_int)) {
+                $count = $wpdb->get_var(
+                    "SELECT COUNT(*) FROM {$wpdb->posts} 
+                    WHERE post_type IN ('post', 'page') 
+                    AND post_status = 'publish'"
+                );
+                return intval($count);
+            }
+            
+            $placeholders = implode(',', array_fill(0, count($posts_in_silos_int), '%d'));
+            $query = $wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->posts} 
+                WHERE post_type IN ('post', 'page') 
+                AND post_status = 'publish'
+                AND ID NOT IN ($placeholders)",
+                $posts_in_silos_int
+            );
+            $count = $wpdb->get_var($query);
+            return intval($count);
+        }
+    }
+    
+    /**
+     * Check if a post is a pillar post
+     */
+    public static function is_pillar_post($post_id) {
+        global $wpdb;
+        
+        $silos_table = $wpdb->prefix . 'ssp_silos';
+        
+        // Validate table name for security
+        if (strpos($silos_table, $wpdb->prefix . 'ssp_') !== 0) {
+            return false;
+        }
+        
+        $result = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM `" . esc_sql($silos_table) . "` WHERE pillar_post_id = %d",
+            intval($post_id)
+        ));
+        
+        return intval($result) > 0;
+    }
+    
+    /**
+     * Get silo information for a pillar post
+     */
+    public static function get_pillar_silo_info($post_id) {
+        global $wpdb;
+        
+        $post_id = intval($post_id);
+        if ($post_id <= 0) {
+            return array(
+                'tooltip' => 'Not a pillar page',
+                'silos' => array()
+            );
+        }
+        
+        $silos_table = $wpdb->prefix . 'ssp_silos';
+        
+        // Validate table name for security
+        if (strpos($silos_table, $wpdb->prefix . 'ssp_') !== 0) {
+            return array(
+                'tooltip' => 'Not a pillar page',
+                'silos' => array()
+            );
+        }
+        
+        $silos = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, name FROM `" . esc_sql($silos_table) . "` WHERE pillar_post_id = %d",
+            $post_id
+        ));
+        
+        if (empty($silos) || !is_array($silos)) {
+            return array(
+                'tooltip' => 'Not a pillar page',
+                'silos' => array()
+            );
+        }
+        
+        $silo_names = array();
+        foreach ($silos as $silo) {
+            if (isset($silo->name) && !empty($silo->name)) {
+                // Sanitize silo name for safe display (will be escaped again in display function)
+                $silo_names[] = sanitize_text_field($silo->name);
+            }
+        }
+        
+        if (empty($silo_names)) {
+            return array(
+                'tooltip' => 'Not a pillar page',
+                'silos' => array()
+            );
+        }
+        
+        $tooltip = 'Pillar page for: ' . implode(', ', $silo_names);
+        if (count($silos) > 1) {
+            $tooltip .= ' (' . count($silos) . ' silos)';
+        }
+        
+        // Tooltip will be escaped when used in esc_attr() in the display function
+        // We sanitize above, but don't HTML escape here to avoid double-escaping
+        
+        return array(
+            'tooltip' => $tooltip,
+            'silos' => $silos
+        );
     }
 }
 

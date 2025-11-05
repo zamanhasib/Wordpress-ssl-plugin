@@ -39,10 +39,67 @@ jQuery(document).ready(function($) {
                 // AI recommended doesn't need additional fields
                 $('.ssp-method-specific').hide();
             }
+            // Re-evaluate controls when setup method changes
+            if (typeof updatePillarDependentControls === 'function') {
+                updatePillarDependentControls();
+            }
         });
         
         // Trigger change event on page load to show correct section
         $('input[name="setup_method"]:checked').trigger('change');
+
+        // Pillar-dependent controls: allow no-pillar manual silos
+        function updatePillarDependentControls() {
+            var selectedPillar = $('input[name="pillar_post"]:checked').length;
+            var hasPillar = selectedPillar > 0;
+            var setupMethod = $('input[name="setup_method"]:checked').val();
+            var linkingMode = $('input[name="linking_mode"]:checked').val();
+
+            var $linkingModes = $('input[name="linking_mode"]');
+            var $pillarOptions = $('#supports-to-pillar, #pillar-to-supports');
+            var $manualSupportChecks = $('input[name="support_posts[]"]');
+            var $submitBtn = $('#ssp-create-silo-form button[type="submit"]');
+
+            // Linking modes stay enabled; pillar options disabled without pillar
+            $linkingModes.prop('disabled', false);
+            $pillarOptions.prop('disabled', !hasPillar);
+
+            // Disable pillar-dependent modes if no pillar
+            var $starModes = $linkingModes.filter('[value="star_hub"], [value="hub_chain"]');
+            if (!hasPillar) {
+                $starModes.prop('disabled', true);
+                // If current selection is invalid, switch to a safe default
+                if (linkingMode === 'star_hub' || linkingMode === 'hub_chain') {
+                    $linkingModes.filter('[value="chained"]').prop('checked', true);
+                    linkingMode = 'chained';
+                    if (typeof showNotice === 'function') {
+                        showNotice('Star/Hub and Hub-Chain require a pillar. Switched to Chained.', 'info');
+                    }
+                }
+            } else {
+                $starModes.prop('disabled', false);
+            }
+
+            // For manual, allow no-pillar if enough supports selected and supported mode
+            var allowNoPillar = false;
+            if (setupMethod === 'manual' && !hasPillar) {
+                var supportSelected = $manualSupportChecks.filter(':checked').length;
+                allowNoPillar = supportSelected >= 2 && ['linear','chained','cross_linking','ai_contextual','custom'].indexOf(linkingMode) !== -1;
+            }
+
+            // Manual support checkboxes enabled only for manual method
+            $manualSupportChecks.prop('disabled', setupMethod !== 'manual');
+
+            // Submit enabled if pillar present or allowed no-pillar
+            $submitBtn.prop('disabled', !(hasPillar || allowNoPillar));
+        }
+
+        // Bind updates for pillar selection changes
+        $(document).on('change', 'input[name="pillar_post"]', updatePillarDependentControls);
+        // Bind updates for support post selection changes (affects no-pillar eligibility)
+        $(document).on('change', 'input[name="support_posts[]"]', updatePillarDependentControls);
+        // Initialize once on load
+        updatePillarDependentControls();
         
         // Linking mode selector
         $('input[name="linking_mode"]').on('change', function() {
@@ -59,6 +116,10 @@ jQuery(document).ready(function($) {
                 }
             } else if ($(this).val() === 'ai_contextual') {
                 $('#contextual-options').show();
+            }
+            // Re-evaluate controls when linking mode changes
+            if (typeof updatePillarDependentControls === 'function') {
+                updatePillarDependentControls();
             }
         });
         
@@ -164,12 +225,74 @@ jQuery(document).ready(function($) {
         $('#export-anchor-report').on('click', handleExportAnchorReport);
         $(document).on('click', '.view-anchor-details', handleViewAnchorDetails);
         
-        // Anchor Details Modal close
-        $(document).on('click', '#anchor-details-modal .ssp-modal-close, #anchor-details-modal', function(e) {
-            if ($(e.target).is('#anchor-details-modal') || $(e.target).is('.ssp-modal-close')) {
-                $('#anchor-details-modal').fadeOut();
+        // Anchor Management handlers
+        $('#anchor-mgmt-silo-select').on('change', function() {
+            var siloId = $(this).val();
+            $('#load-anchor-management').prop('disabled', !siloId);
+        });
+        $('#load-anchor-management').on('click', handleLoadAnchorManagement);
+        $(document).on('click', '.get-ai-suggestions-btn', handleGetAISuggestions);
+        $(document).on('click', '.select-anchor-suggestion', handleSelectAnchorSuggestion);
+        
+        // Close suggestions modal (use delegated handlers to prevent conflicts)
+        $(document).on('click', '#anchor-suggestions-modal .ssp-modal-close', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            $('#anchor-suggestions-modal').hide();
+            $('#suggestions-list').hide().html('');
+        });
+        
+        $(document).on('click', '#anchor-suggestions-modal .ssp-modal-dismiss', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            $('#anchor-suggestions-modal').hide();
+            $('#suggestions-list').hide().html('');
+        });
+        
+        // Close on overlay click
+        $(document).on('click', '#anchor-suggestions-modal', function(e) {
+            if (e.target === this) {
+                $('#anchor-suggestions-modal').hide();
+                $('#suggestions-list').hide().html('');
             }
         });
+        
+        // Close on ESC key
+        $(document).on('keydown', function(e) {
+            if (e.key === 'Escape' && $('#anchor-suggestions-modal').is(':visible')) {
+                $('#anchor-suggestions-modal').hide();
+                $('#suggestions-list').hide().html('');
+            }
+        });
+        
+        // Anchor Details Modal close
+        function closeAnchorModal() {
+                $('#anchor-details-modal').fadeOut();
+            $(document).off('keydown.sspAnchorModal');
+        }
+        
+        $(document).on('click', '#anchor-details-modal .ssp-modal-close', closeAnchorModal);
+        $(document).on('click', '#anchor-details-modal .ssp-modal-dismiss', closeAnchorModal);
+        $(document).on('click', '#anchor-details-modal', function(e) {
+            if ($(e.target).is('#anchor-details-modal')) {
+                closeAnchorModal();
+            }
+        });
+        // ESC key to close anchor modal
+        $(document).on('keydown.sspAnchorModal', function(e) {
+            if (e.key === 'Escape' && $('#anchor-details-modal').is(':visible')) {
+                closeAnchorModal();
+            }
+        });
+        
+        // Orphan Posts handlers
+        $('#select-all-orphans, #select-all-orphans-btn').on('click', handleSelectAllOrphans);
+        $('#deselect-all-orphans-btn').on('click', handleDeselectAllOrphans);
+        $(document).on('change', '.orphan-post-checkbox', handleOrphanCheckboxChange);
+        $('#assign-orphans-btn').on('click', handleAssignOrphanPosts);
+        $('#assign-orphan-silo-select').on('change', handleOrphanCheckboxChange);
+        $(document).on('change', '.assign-single-orphan-silo', handleSingleOrphanSiloChange);
+        $(document).on('click', '.assign-single-orphan-btn', handleAssignSingleOrphan);
     }
     
     function handleCreateSilo(e) {
@@ -184,9 +307,10 @@ jQuery(document).ready(function($) {
         // Validate form data
         var setupMethod = $form.find('input[name="setup_method"]:checked').val();
         var pillarPosts = [];
-        $form.find('input[name="pillar_posts[]"]:checked').each(function() {
-            pillarPosts.push($(this).val());
-        });
+        var selectedPillar = $form.find('input[name="pillar_post"]:checked').val();
+        if (selectedPillar) {
+            pillarPosts.push(selectedPillar);
+        }
         
         if (!setupMethod) {
             showNotice('Please select a setup method', 'error');
@@ -194,10 +318,35 @@ jQuery(document).ready(function($) {
             return;
         }
         
+        // Validate pillar posts - allow no pillar only for manual method with enough supports
         if (pillarPosts.length === 0) {
+            if (setupMethod === 'manual') {
+                // Check if manual method has enough support posts and compatible linking mode
+                var supportPosts = [];
+                $form.find('input[name="support_posts[]"]:checked').each(function() {
+                    supportPosts.push($(this).val());
+                });
+                var linkingMode = $form.find('input[name="linking_mode"]:checked').val();
+                var compatibleNoPillarModes = ['linear', 'chained', 'cross_linking', 'ai_contextual', 'custom'];
+                
+                if (supportPosts.length < 2) {
+                    showNotice('At least 2 support posts are required when no pillar is selected', 'error');
+                    $submitBtn.prop('disabled', false).text(originalText);
+                    return;
+                }
+                
+                if (!compatibleNoPillarModes.includes(linkingMode)) {
+                    showNotice('Selected linking mode requires a pillar post. Please select a compatible mode (Linear, Chained, Cross-linking, AI-Contextual, or Custom)', 'error');
+                    $submitBtn.prop('disabled', false).text(originalText);
+                    return;
+                }
+                // No pillar is allowed for manual method with valid conditions - continue
+            } else {
+                // AI and Category methods require pillar posts
             showNotice('Please select at least one pillar post', 'error');
             $submitBtn.prop('disabled', false).text(originalText);
             return;
+            }
         }
         
         var formData = {
@@ -217,16 +366,21 @@ jQuery(document).ready(function($) {
             max_contextual_links: $form.find('input[name="max_contextual_links"]').val()
         };
         
-        // Add pillar posts as array elements
-        pillarPosts.forEach(function(postId, index) {
-            formData['pillar_posts[' + index + ']'] = postId;
-        });
+        // Add pillar post (single radio button - may be empty for no-pillar manual silos)
+        if (pillarPosts.length > 0) {
+            formData['pillar_post'] = pillarPosts[0];
+        }
         
         // Add method-specific data
         var setupMethod = formData.setup_method;
         
         // For AI-Recommended, show recommendations first
         if (setupMethod === 'ai_recommended') {
+            if (pillarPosts.length === 0) {
+                showNotice('Please select at least one pillar post', 'error');
+                $submitBtn.prop('disabled', false).text(originalText);
+                return;
+            }
             $submitBtn.prop('disabled', false).text(originalText);
             showAIRecommendations(pillarPosts, formData, $form);
             return;
@@ -239,6 +393,11 @@ jQuery(document).ready(function($) {
             $form.find('input[name="support_posts[]"]:checked').each(function() {
                 supportPosts.push($(this).val());
             });
+            if (supportPosts.length === 0) {
+                showNotice('Please select at least one support post', 'error');
+                $submitBtn.prop('disabled', false).text(originalText);
+                return;
+            }
             // Send as individual array elements for PHP to receive properly
             supportPosts.forEach(function(postId, index) {
                 formData['support_posts[' + index + ']'] = postId;
@@ -418,48 +577,186 @@ jQuery(document).ready(function($) {
         // Remove existing modal if any
         $('#ssp-silo-details-modal').remove();
         
-        var modalHtml = '<div id="ssp-silo-details-modal" class="ssp-modal-overlay">';
-        modalHtml += '<div class="ssp-modal-content">';
-        modalHtml += '<span class="ssp-modal-close">&times;</span>';
-        modalHtml += '<h2>📊 Silo Details</h2>';
+        var modalHtml = '<div id="ssp-silo-details-modal" class="ssp-modal-overlay" role="dialog" aria-modal="true">';
+        modalHtml +=   '<div class="ssp-modal-content ssp-silo-modal" tabindex="-1" aria-labelledby="ssp-silo-details-title">';
+        // Header
+        modalHtml +=     '<div class="ssp-modal-header">';
+        modalHtml +=       '<h2 id="ssp-silo-details-title">📊 Silo Details</h2>';
+        modalHtml +=       '<button type="button" class="ssp-modal-close" aria-label="Close">&times;</button>';
+        modalHtml +=     '</div>';
+        // Body
+        modalHtml +=     '<div class="ssp-modal-body">';
+        modalHtml +=       '<div class="silo-info">';
+        modalHtml +=         '<h3>Basic Information</h3>';
+        modalHtml +=         '<p><strong>Silo Name:</strong> ' + escapeHtml(siloData.name || '') + '</p>';
+        modalHtml +=         '<p><strong>Pillar Post:</strong> ' + escapeHtml(siloData.pillar_title || 'N/A') + ' <span class="ssp-mono">(ID: ' + escapeHtml(siloData.pillar_id || 0) + ')</span></p>';
+        modalHtml +=         '<p><strong>Setup Method:</strong> <span class="ssp-badge ssp-badge-info">' + escapeHtml(siloData.setup_method || '') + '</span></p>';
+        modalHtml +=         '<p><strong>Linking Mode:</strong> <span class="ssp-badge ssp-badge-primary">' + escapeHtml(siloData.linking_mode || '') + '</span></p>';
+        modalHtml +=         '<p><strong>Total Support Posts:</strong> ' + escapeHtml(siloData.posts ? siloData.posts.length : 0) + '</p>';
+        modalHtml +=         '<p><strong>Total Links:</strong> ' + escapeHtml(siloData.total_links || 0) + '</p>';
+        modalHtml +=         '<p><strong>Created:</strong> ' + escapeHtml(siloData.created_at || '') + '</p>';
+        modalHtml +=       '</div>';
         
-        modalHtml += '<div class="silo-info">';
-        modalHtml += '<p><strong>Silo Name:</strong> ' + siloData.name + '</p>';
-        modalHtml += '<p><strong>Pillar Post:</strong> ' + siloData.pillar_title + ' (ID: ' + siloData.pillar_id + ')</p>';
-        modalHtml += '<p><strong>Setup Method:</strong> ' + siloData.setup_method + '</p>';
-        modalHtml += '<p><strong>Linking Mode:</strong> ' + siloData.linking_mode + '</p>';
-        modalHtml += '<p><strong>Total Support Posts:</strong> ' + siloData.posts.length + '</p>';
-        modalHtml += '<p><strong>Total Links:</strong> ' + siloData.total_links + '</p>';
-        modalHtml += '<p><strong>Created:</strong> ' + siloData.created_at + '</p>';
+        // Display all settings
+        if (siloData.settings) {
+            modalHtml +=       '<div class="silo-settings">';
+            modalHtml +=         '<h3>⚙️ All Settings</h3>';
+            modalHtml +=         '<table class="wp-list-table widefat fixed striped" style="margin-top: 10px;">';
+            modalHtml +=           '<thead><tr><th style="width: 40%;">Setting</th><th>Value</th></tr></thead>';
+            modalHtml +=           '<tbody>';
+            
+            // Format settings for display
+            var settingsLabels = {
+                'use_ai_anchors': 'Use AI for Anchor Text',
+                'auto_link': 'Auto-link Posts',
+                'auto_update': 'Auto-update on New Posts',
+                'supports_to_pillar': 'Support Posts Link to Pillar',
+                'pillar_to_supports': 'Pillar Links to Support Posts',
+                'max_pillar_links': 'Max Pillar Links',
+                'max_contextual_links': 'Max Contextual Links per Post',
+                'placement_type': 'Link Placement',
+                'auto_assign_category': 'Auto-assign to Category',
+                'auto_assign_category_id': 'Category ID',
+                'category_id': 'Category ID',
+                'custom_pattern': 'Custom Linking Pattern'
+            };
+            
+            var placementTypes = {
+                'natural': 'Natural Link Insertion',
+                'first_paragraph': 'First Paragraph Only'
+            };
+            
+            function formatSettingValue(key, value) {
+                if (value === true || value === 'true' || value === 1) return '✓ Yes';
+                if (value === false || value === 'false' || value === 0) return '✗ No';
+                if (key === 'placement_type' && placementTypes[value]) return placementTypes[value];
+                if (key === 'auto_assign_category_id' && siloData.category_name) return value + ' (' + escapeHtml(siloData.category_name) + ')';
+                if (key === 'category_id' && siloData.category_name) return value + ' (' + escapeHtml(siloData.category_name) + ')';
+                if (key === 'custom_pattern' && Array.isArray(value)) {
+                    if (value.length === 0) return 'None';
+                    return value.length + ' rule(s) defined';
+                }
+                return escapeHtml(String(value));
+            }
+            
+            // Display settings in a logical order
+            var orderedKeys = [
+                'use_ai_anchors',
+                'auto_link',
+                'auto_update',
+                'placement_type',
+                'supports_to_pillar',
+                'pillar_to_supports',
+                'max_pillar_links',
+                'max_contextual_links',
+                'auto_assign_category',
+                'auto_assign_category_id',
+                'category_id',
+                'custom_pattern'
+            ];
+            
+            orderedKeys.forEach(function(key) {
+                if (siloData.settings.hasOwnProperty(key)) {
+                    var label = settingsLabels[key] || key.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
+                    var value = formatSettingValue(key, siloData.settings[key]);
+                    modalHtml +=           '<tr>';
+                    modalHtml +=             '<td><strong>' + escapeHtml(label) + '</strong></td>';
+                    modalHtml +=             '<td>' + value + '</td>';
+                    modalHtml +=           '</tr>';
+                }
+            });
+            
+            // Show custom pattern details if exists
+            if (siloData.settings.custom_pattern && Array.isArray(siloData.settings.custom_pattern) && siloData.settings.custom_pattern.length > 0) {
+                modalHtml +=           '<tr>';
+                modalHtml +=             '<td colspan="2" style="padding: 10px 0;">';
+                modalHtml +=               '<strong>Custom Pattern Rules:</strong>';
+                modalHtml +=               '<ul style="margin: 10px 0 0 20px;">';
+                siloData.settings.custom_pattern.forEach(function(rule) {
+                    modalHtml +=           '<li>' + escapeHtml(rule.source || '') + ' → ' + escapeHtml(rule.target || '') + '</li>';
+                });
+                modalHtml +=               '</ul>';
+                modalHtml +=             '</td>';
+                modalHtml +=           '</tr>';
+            }
+            
+            modalHtml +=           '</tbody>';
+            modalHtml +=         '</table>';
+            modalHtml +=       '</div>';
+        }
+        
+        modalHtml +=       '<h3>Support Posts in This Silo</h3>';
+        modalHtml +=       '<div class="ssp-table-tools">';
+        modalHtml +=         '<label class="screen-reader-text" for="ssp-silo-posts-filter">Filter posts</label>';
+        modalHtml +=         '<input id="ssp-silo-posts-filter" type="search" placeholder="Filter by title..." />';
+        modalHtml +=       '</div>';
+        modalHtml +=       '<table class="wp-list-table widefat fixed striped">';
+        modalHtml +=         '<thead><tr><th>Post Title</th><th style="width: 110px;">Post ID</th><th style="width: 110px;">Links</th><th style="width: 160px;">Actions</th></tr></thead>';
+        modalHtml +=         '<tbody>';
+        
+        if (siloData.posts && Array.isArray(siloData.posts)) {
+            siloData.posts.forEach(function(post) {
+                var postId = escapeHtml(post.id || '');
+                var postTitle = escapeHtml(post.title || '');
+                var linkCount = escapeHtml(post.link_count || 0);
+                var adminBase = window.location.origin + '/wp-admin/';
+                var editUrl = adminBase + 'post.php?post=' + postId + '&action=edit';
+                var viewUrl = '/?p=' + postId;
+                modalHtml +=         '<tr>';
+                modalHtml +=           '<td><strong>' + postTitle + '</strong></td>';
+                modalHtml +=           '<td class="ssp-mono">#' + postId + '</td>';
+                modalHtml +=           '<td>' + linkCount + '</td>';
+                modalHtml +=           '<td class="ssp-actions">' +
+                                        '<a class="button button-small" href="' + editUrl + '" target="_blank" rel="noopener">Edit</a> ' +
+                                        '<a class="button button-small" href="' + viewUrl + '" target="_blank" rel="noopener">View</a>' +
+                                      '</td>';
+                modalHtml +=         '</tr>';
+            });
+        }
+        
+        modalHtml +=         '</tbody></table>';
+        modalHtml +=     '</div>'; // body
+        // Footer
+        modalHtml +=     '<div class="ssp-modal-footer">';
+        modalHtml +=       '<button type="button" class="button button-primary ssp-modal-dismiss">Close</button>';
+        modalHtml +=     '</div>';
+        modalHtml +=   '</div>';
         modalHtml += '</div>';
-        
-        modalHtml += '<h3>Support Posts in This Silo:</h3>';
-        modalHtml += '<table class="wp-list-table widefat">';
-        modalHtml += '<thead><tr><th>Post Title</th><th>Post ID</th><th>Links</th></tr></thead>';
-        modalHtml += '<tbody>';
-        
-        siloData.posts.forEach(function(post) {
-            modalHtml += '<tr>';
-            modalHtml += '<td>' + post.title + '</td>';
-            modalHtml += '<td>#' + post.id + '</td>';
-            modalHtml += '<td>' + post.link_count + '</td>';
-            modalHtml += '</tr>';
-        });
-        
-        modalHtml += '</tbody></table>';
-        
-        modalHtml += '<div class="ssp-modal-actions">';
-        modalHtml += '<button class="button button-primary" onclick="$(\'#ssp-silo-details-modal\').remove()">Close</button>';
-        modalHtml += '</div>';
-        modalHtml += '</div></div>';
         
         $('body').append(modalHtml);
         
-        // Close on X or background click
-        $('.ssp-modal-close, #ssp-silo-details-modal').on('click', function(e) {
-            if ($(e.target).is('#ssp-silo-details-modal') || $(e.target).is('.ssp-modal-close')) {
+        // Focus the modal content for accessibility
+        var $modalContent = $('#ssp-silo-details-modal .ssp-modal-content');
+        if ($modalContent.length) { $modalContent.focus(); }
+        
+        // Function to close modal and clean up handlers
+        function closeModal() {
                 $('#ssp-silo-details-modal').remove();
+            $(document).off('click.sspSiloModal keydown.sspSiloModal');
+        }
+        
+        // Close interactions - attach directly to modal elements
+        $('#ssp-silo-details-modal .ssp-modal-close').on('click', closeModal);
+        $('#ssp-silo-details-modal .ssp-modal-dismiss').on('click', closeModal);
+        $('#ssp-silo-details-modal').on('click.sspSiloModal', function(e) {
+            if ($(e.target).is('#ssp-silo-details-modal')) {
+                closeModal();
             }
+        });
+        // ESC key to close
+        $(document).on('keydown.sspSiloModal', function(e) {
+            if (e.key === 'Escape' && $('#ssp-silo-details-modal').length) {
+                closeModal();
+            }
+        });
+
+        // Client-side filter for posts table
+        $('#ssp-silo-posts-filter').on('input', function() {
+            var query = $(this).val().toLowerCase();
+            $('#ssp-silo-details-modal tbody tr').each(function() {
+                var title = $(this).find('td').eq(0).text().toLowerCase();
+                $(this).toggle(title.indexOf(query) !== -1);
+            });
         });
     }
     
@@ -1118,12 +1415,52 @@ jQuery(document).ready(function($) {
     }
     
     function showNotice(message, type) {
-        var $notice = $('<div class="notice notice-' + type + ' is-dismissible"><p>' + message + '</p></div>');
-        $('.wrap h1').after($notice);
+        // Remove any existing alerts first
+        $('.ssp-alert').remove();
+        
+        // Map WordPress notice types to alert styles
+        var alertClass = 'ssp-alert-' + type;
+        var icons = {
+            'success': '✓',
+            'error': '✕',
+            'warning': '⚠',
+            'info': 'ℹ'
+        };
+        var icon = icons[type] || icons['info'];
+        
+        // Create fixed-position alert (toast notification)
+        var $notice = $('<div class="ssp-alert ' + alertClass + '">' +
+            '<div class="ssp-alert-content">' +
+            '<span class="ssp-alert-icon">' + icon + '</span>' +
+            '<span class="ssp-alert-message">' + message + '</span>' +
+            '<button type="button" class="ssp-alert-close" aria-label="Close">&times;</button>' +
+            '</div>' +
+            '</div>');
+        
+        // Append to body for fixed positioning
+        $('body').append($notice);
+        
+        // Animate in after a brief delay
+        setTimeout(function() {
+            $notice.addClass('ssp-alert-show');
+        }, 10);
+        
+        // Close button handler
+        $notice.find('.ssp-alert-close').on('click', function() {
+            $notice.removeClass('ssp-alert-show');
+            setTimeout(function() {
+                $notice.remove();
+            }, 300);
+        });
         
         // Auto-dismiss after 5 seconds
         setTimeout(function() {
-            $notice.fadeOut();
+            if ($notice.hasClass('ssp-alert-show')) {
+                $notice.removeClass('ssp-alert-show');
+                setTimeout(function() {
+                    $notice.remove();
+                }, 300);
+            }
         }, 5000);
     }
     
@@ -1150,6 +1487,10 @@ jQuery(document).ready(function($) {
             data: recData,
             success: function(response) {
                 if (response.success && response.data.recommendations) {
+                    // Show warnings if any
+                    if (response.data.warnings && response.data.warnings.length > 0) {
+                        showNotice('Warning: ' + response.data.warnings.join('. '), 'warning');
+                    }
                     displayAIRecommendationsModal(response.data.recommendations, formData, $form);
                 } else {
                     showNotice(response.data || 'Failed to get AI recommendations', 'error');
@@ -1395,6 +1736,21 @@ jQuery(document).ready(function($) {
         $('#anchor-modal-body').html('<p style="text-align: center; padding: 20px;">Loading...</p>');
         $('#anchor-details-modal').fadeIn();
         
+        // Scroll modal to center of viewport
+        setTimeout(function() {
+            var $modal = $('#anchor-details-modal');
+            if ($modal.length) {
+                var $modalContent = $modal.find('.ssp-modal-content');
+                if ($modalContent.length) {
+                    $modalContent.focus();
+                    // Ensure modal is centered
+                    $('html, body').animate({
+                        scrollTop: 0
+                    }, 100);
+                }
+            }
+        }, 50);
+        
         $.ajax({
             url: ssp_ajax.ajax_url,
             type: 'POST',
@@ -1421,21 +1777,30 @@ jQuery(document).ready(function($) {
      * Display anchor details in modal
      */
     function displayAnchorDetails(data) {
-        var html = '<h3>Anchor: "' + escapeHtml(data.anchor_text) + '"</h3>';
-        html += '<p><strong>Total Usage:</strong> ' + data.total + ' times</p>';
+        if (!data) {
+            $('#anchor-modal-body').html('<p style="color: red;">Error: No data received</p>');
+            return;
+        }
+        
+        var html = '<h3>Anchor: "' + escapeHtml(data.anchor_text || '') + '"</h3>';
+        html += '<p><strong>Total Usage:</strong> ' + escapeHtml(data.total || 0) + ' times</p>';
         html += '<hr>';
         html += '<h4>Usage Details:</h4>';
         html += '<table class="wp-list-table widefat fixed striped">';
         html += '<thead><tr><th>From Post</th><th>To Post</th><th>Silo</th><th>Created</th></tr></thead>';
         html += '<tbody>';
         
-        if (data.details && data.details.length > 0) {
+        if (data.details && Array.isArray(data.details) && data.details.length > 0) {
             data.details.forEach(function(detail) {
+                if (!detail) return;
+                // Validate and sanitize URLs (don't HTML-escape URLs for href attributes)
+                var sourceUrl = (detail.source_post_url && typeof detail.source_post_url === 'string') ? detail.source_post_url.replace(/[<>]/g, '') : '#';
+                var targetUrl = (detail.target_post_url && typeof detail.target_post_url === 'string') ? detail.target_post_url.replace(/[<>]/g, '') : '#';
                 html += '<tr>';
-                html += '<td><a href="' + detail.source_post_url + '" target="_blank">' + escapeHtml(detail.source_post_title) + '</a></td>';
-                html += '<td><a href="' + detail.target_post_url + '" target="_blank">' + escapeHtml(detail.target_post_title) + '</a></td>';
+                html += '<td><a href="' + sourceUrl + '" target="_blank" rel="noopener">' + escapeHtml(detail.source_post_title || '') + '</a></td>';
+                html += '<td><a href="' + targetUrl + '" target="_blank" rel="noopener">' + escapeHtml(detail.target_post_title || '') + '</a></td>';
                 html += '<td>' + (detail.silo_name ? escapeHtml(detail.silo_name) : '<em>Deleted Silo</em>') + '</td>';
-                html += '<td>' + detail.created_at + '</td>';
+                html += '<td>' + escapeHtml(detail.created_at || '') + '</td>';
                 html += '</tr>';
             });
         } else {
@@ -1535,9 +1900,725 @@ jQuery(document).ready(function($) {
     }
     
     /**
-     * Escape HTML
+     * Handle select all orphans
      */
+    function handleSelectAllOrphans(e) {
+        e.preventDefault();
+        $('.orphan-post-checkbox').prop('checked', true);
+        handleOrphanCheckboxChange();
+    }
+    
+    /**
+     * Handle deselect all orphans
+     */
+    function handleDeselectAllOrphans(e) {
+        e.preventDefault();
+        $('.orphan-post-checkbox').prop('checked', false);
+        handleOrphanCheckboxChange();
+    }
+    
+    /**
+     * Handle orphan checkbox change
+     */
+    function handleOrphanCheckboxChange() {
+        var checkedCount = $('.orphan-post-checkbox:checked').length;
+        var hasSiloSelected = $('#assign-orphan-silo-select').val() !== '';
+        
+        $('#assign-orphans-btn').prop('disabled', checkedCount === 0 || !hasSiloSelected);
+        
+        // Update select all checkbox
+        var totalCheckboxes = $('.orphan-post-checkbox').length;
+        $('#select-all-orphans').prop('checked', checkedCount === totalCheckboxes && totalCheckboxes > 0);
+    }
+    
+    /**
+     * Handle assign orphan posts
+     */
+    function handleAssignOrphanPosts(e) {
+        e.preventDefault();
+        
+        var $button = $(this);
+        var siloId = $('#assign-orphan-silo-select').val();
+        var selectedPosts = [];
+        
+        $('.orphan-post-checkbox:checked').each(function() {
+            selectedPosts.push($(this).val());
+        });
+        
+        if (!siloId) {
+            showNotice('Please select a silo first', 'error');
+            return;
+        }
+        
+        if (selectedPosts.length === 0) {
+            showNotice('Please select at least one post', 'error');
+            return;
+        }
+        
+        if (!confirm('Assign ' + selectedPosts.length + ' post(s) to selected silo?')) {
+            return;
+        }
+        
+        $button.prop('disabled', true).text('Assigning...');
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_assign_orphan_posts',
+                nonce: ssp_ajax.nonce,
+                silo_id: siloId,
+                post_ids: selectedPosts
+            },
+            success: function(response) {
+                $button.prop('disabled', false).text('Assign Selected Posts');
+                
+                if (response.success) {
+                    var message = response.data.message || 'Posts assigned successfully!';
+                    showNotice(message, 'success');
+
+                    // Count how many rows will be removed
+                    var rowsToRemove = 0;
+                    selectedPosts.forEach(function(id) {
+                        var $row = $('tr[data-post-id="' + id + '"]');
+                        if ($row.length) {
+                            rowsToRemove++;
+                        }
+                    });
+
+                    // Use server-confirmed count if available, otherwise use visible rows
+                    var confirmedAdded = (response.data && typeof response.data.posts_added !== 'undefined')
+                        ? parseInt(response.data.posts_added, 10) : NaN;
+                    
+                    var decrementBy = !isNaN(confirmedAdded) ? confirmedAdded : rowsToRemove;
+                    
+                    // Update counter immediately with estimated count (optimistic update)
+                    if (decrementBy > 0) {
+                        updateOrphanStats(-decrementBy);
+                    }
+                    
+                    // Fetch authoritative count from server AFTER a delay to ensure DB transaction is committed
+                    setTimeout(function() {
+                        $.ajax({
+                            url: ssp_ajax.ajax_url,
+                            type: 'POST',
+                            data: { 
+                                action: 'ssp_get_orphan_count', 
+                                nonce: ssp_ajax.nonce 
+                            },
+                            success: function(r) {
+                                if (r && r.success && r.data && typeof r.data.total !== 'undefined') {
+                                    var $counter = $('#ssp-orphan-total');
+                                    if ($counter.length) {
+                                        $counter.text(parseInt(r.data.total, 10));
+                                        // Force repaint
+                                        if ($counter[0]) {
+                                            $counter[0].offsetHeight;
+                                        }
+                                    }
+                                    // Update total hint if present
+                                    var $hint = $('.ssp-orphan-posts .description:contains("Showing first 100 orphan posts")');
+                                    if ($hint.length) {
+                                        $hint.html('⚠️ Showing first 100 orphan posts. Total: ' + parseInt(r.data.total, 10) + ' posts.');
+                                    }
+                                }
+                            },
+                            error: function() {
+                                // Silent fail - optimistic update should be enough
+                                console.warn('Failed to fetch authoritative orphan count');
+                            }
+                        });
+                    }, 300); // Wait 300ms for DB transaction to commit
+
+                    // Remove assigned rows without full reload
+                    if (rowsToRemove === 0) {
+                        // No rows found in DOM, just reset controls
+                        $('.orphan-post-checkbox').prop('checked', false);
+                        handleOrphanCheckboxChange();
+                    } else {
+                        var rowsRemoved = 0;
+                        selectedPosts.forEach(function(id) {
+                            var $row = $('tr[data-post-id="' + id + '"]');
+                            if ($row.length) {
+                                $row.fadeOut(200, function() {
+                                    $(this).remove();
+                                    rowsRemoved++;
+                                    
+                                    // Check if all rows are removed
+                                    if (rowsRemoved === rowsToRemove) {
+                                        // Reset controls
+                                        $('.orphan-post-checkbox').prop('checked', false);
+                                        handleOrphanCheckboxChange();
+                                        
+                                        // Wait a tick to ensure DOM and counter are updated, then check for empty state
+                                        setTimeout(function() {
+                                            var remainingRows = $('#orphan-posts-tbody tr[data-post-id]').length;
+                                            // Remove empty section headers
+                                            $('#orphan-posts-tbody tr.ssp-section-header').each(function() {
+                                                var $header = $(this);
+                                                var $range = $header.nextUntil('tr.ssp-section-header');
+                                                if ($range.filter('tr[data-post-id]').length === 0) {
+                                                    $header.remove();
+                                                }
+                                            });
+                                            var $counter = $('#ssp-orphan-total');
+                                            var counterValue = 0;
+                                            if ($counter.length) {
+                                                var counterText = $counter.text().trim().replace(/[^\d]/g, '');
+                                                counterValue = parseInt(counterText, 10) || 0;
+                                            }
+                                            
+                                            if (remainingRows === 0 && counterValue === 0) {
+                                                var $tableSection = $('#orphan-posts-tbody').closest('.ssp-form-section');
+                                                if ($tableSection.length) {
+                                                    $tableSection.html(
+                                                        '<div class="ssp-empty-state"><p>🎉 Great! No orphan posts found. All your posts are assigned to silos.</p></div>'
+                                                    );
+                                                }
+                                            }
+                                        }, 0);
+                                    }
+                                });
+                            }
+                        });
+                    }
+                } else {
+                    showNotice(response.data || 'Failed to assign posts', 'error');
+                }
+            },
+            error: function() {
+                $button.prop('disabled', false).text('Assign Selected Posts');
+                showNotice('Error assigning posts', 'error');
+            }
+        });
+    }
+    
+    /**
+     * Handle single orphan silo change
+     */
+    function handleSingleOrphanSiloChange() {
+        var $select = $(this);
+        var postId = $select.data('post-id');
+        var siloId = $select.val();
+        
+        var $assignBtn = $('.assign-single-orphan-btn[data-post-id="' + postId + '"]');
+        
+        if (siloId) {
+            $assignBtn.show();
+        } else {
+            $assignBtn.hide();
+        }
+    }
+    
+    /**
+     * Handle assign single orphan
+     */
+    function handleAssignSingleOrphan(e) {
+        e.preventDefault();
+        
+        var $button = $(this);
+        var postId = $button.data('post-id');
+        var $select = $('.assign-single-orphan-silo[data-post-id="' + postId + '"]');
+        var siloId = $select.val();
+        
+        if (!siloId) {
+            showNotice('Please select a silo', 'error');
+            return;
+        }
+        
+        $button.prop('disabled', true).text('Assigning...');
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_assign_orphan_posts',
+                nonce: ssp_ajax.nonce,
+                silo_id: siloId,
+                post_ids: [postId]
+            },
+            success: function(response) {
+                if (response.success) {
+                    showNotice('Post assigned successfully!', 'success');
+                    // Remove row without full reload and update counter
+                    var $row = $button.closest('tr');
+                    $row.fadeOut(200, function() {
+                        $(this).remove();
+                        // Update counter immediately (optimistic update)
+                        updateOrphanStats(-1);
+                        
+                        // Fetch authoritative count from server AFTER a delay
+                        setTimeout(function() {
+                            $.ajax({
+                                url: ssp_ajax.ajax_url,
+                                type: 'POST',
+                                data: { 
+                                    action: 'ssp_get_orphan_count', 
+                                    nonce: ssp_ajax.nonce 
+                                },
+                                success: function(r) {
+                                    if (r && r.success && r.data && typeof r.data.total !== 'undefined') {
+                                        var $counter = $('#ssp-orphan-total');
+                                        if ($counter.length) {
+                                            $counter.text(parseInt(r.data.total, 10));
+                                            // Force repaint
+                                            if ($counter[0]) {
+                                                $counter[0].offsetHeight;
+                                            }
+                                        }
+                                    }
+                                },
+                                error: function() {
+                                    // Silent fail - optimistic update should be enough
+                                    console.warn('Failed to fetch authoritative orphan count');
+                                }
+                            });
+                        }, 300); // Wait 300ms for DB transaction to commit
+                        
+                        // Wait a tick to ensure DOM is updated, then check for empty state
+                        setTimeout(function() {
+                            var remainingRows = $('#orphan-posts-tbody tr[data-post-id]').length;
+                            // Remove empty section headers
+                            $('#orphan-posts-tbody tr.ssp-section-header').each(function() {
+                                var $header = $(this);
+                                var $range = $header.nextUntil('tr.ssp-section-header');
+                                if ($range.filter('tr[data-post-id]').length === 0) {
+                                    $header.remove();
+                                }
+                            });
+                            var $counter = $('#ssp-orphan-total');
+                            var counterValue = 0;
+                            if ($counter.length) {
+                                var counterText = $counter.text().trim().replace(/[^\d]/g, '');
+                                counterValue = parseInt(counterText, 10) || 0;
+                            }
+                            
+                            if (remainingRows === 0 && counterValue === 0) {
+                                var $tableSection = $('#orphan-posts-tbody').closest('.ssp-form-section');
+                                if ($tableSection.length) {
+                                    $tableSection.html(
+                                        '<div class="ssp-empty-state"><p>🎉 Great! No orphan posts found. All your posts are assigned to silos.</p></div>'
+                                    );
+                                }
+                            }
+                        }, 0);
+                    });
+                } else {
+                    showNotice(response.data || 'Failed to assign post', 'error');
+                    $button.prop('disabled', false).text('Assign');
+                }
+            },
+            error: function() {
+                showNotice('Error assigning post', 'error');
+                $button.prop('disabled', false).text('Assign');
+            }
+        });
+    }
+
+    // Update the orphan posts stats counter in the banner
+    function updateOrphanStats(delta) {
+        var $counter = $('#ssp-orphan-total');
+        if ($counter.length && $counter.length > 0) {
+            // Get current text content - handle both text() and html()
+            var currentText = ($counter.text() || $counter.html() || '0').toString().trim();
+            // Remove any non-numeric characters
+            currentText = currentText.replace(/[^\d]/g, '');
+            var current = parseInt(currentText, 10);
+            
+            if (!isNaN(current) && current >= 0) {
+                var next = Math.max(0, current + (delta || 0));
+                
+                // Update both text and html to ensure visibility
+                $counter.text(next);
+                $counter.html(next);
+                
+                // Force multiple repaints to ensure browser renders
+                if ($counter[0]) {
+                    var element = $counter[0];
+                    // Force layout recalculation
+                    element.offsetHeight;
+                    element.clientHeight;
+                    // Force style recalculation
+                    window.getComputedStyle(element).opacity;
+                    // Trigger reflow
+                    void element.offsetWidth;
+                }
+                
+                // Debug log
+                console.log('Orphan counter updated:', current, '+', delta, '=', next);
+            } else {
+                console.warn('Could not parse orphan counter value:', currentText);
+            }
+        } else {
+            console.warn('Orphan counter element not found: #ssp-orphan-total');
+        }
+    }
+    
+    /**
+     * Handle load anchor management
+     */
+    function handleLoadAnchorManagement(e) {
+        if (e) e.preventDefault();
+        
+        var siloId = $('#anchor-mgmt-silo-select').val();
+        if (!siloId) {
+            showNotice('Please select a silo', 'error');
+            return;
+        }
+        
+        $('#anchor-mgmt-loading').show();
+        $('#anchor-mgmt-content').hide();
+        $('#anchor-mgmt-tbody').html('');
+        
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_get_silo_anchors',
+                nonce: ssp_ajax.nonce,
+                silo_id: siloId
+            },
+            success: function(response) {
+                $('#anchor-mgmt-loading').hide();
+                
+                if (response.success && response.data.anchors) {
+                    displayAnchorManagementTable(response.data.anchors);
+                    $('#anchor-mgmt-content').show();
+                } else {
+                    showNotice(response.data || 'No anchors found for this silo', 'info');
+                    $('#anchor-mgmt-tbody').html('<tr><td colspan="5" style="text-align: center; padding: 20px;">No anchors found for this silo. Generate links first.</td></tr>');
+                    $('#anchor-mgmt-content').show();
+                }
+            },
+            error: function() {
+                $('#anchor-mgmt-loading').hide();
+                showNotice('Error loading anchors', 'error');
+                $('#anchor-mgmt-tbody').html('<tr><td colspan="5" style="text-align: center; padding: 20px;">Error loading data</td></tr>');
+                $('#anchor-mgmt-content').show();
+            }
+        });
+    }
+    
+    /**
+     * Display anchor management table
+     */
+    function displayAnchorManagementTable(anchors) {
+        var html = '';
+        
+        if (!anchors || anchors.length === 0) {
+            html = '<tr><td colspan="5" style="text-align: center; padding: 20px;">No anchors found for this silo</td></tr>';
+        } else {
+            anchors.forEach(function(anchor) {
+                // Skip invalid anchors
+                if (!anchor || !anchor.link_id) {
+                    return;
+                }
+                html += '<tr data-link-id="' + escapeHtml(String(anchor.link_id)) + '">';
+                html += '<td>';
+                html += '<a href="' + escapeHtml(anchor.source_post_edit_url) + '" target="_blank">';
+                html += escapeHtml(anchor.source_post_title);
+                html += '</a>';
+                html += '</td>';
+                html += '<td>';
+                html += '<a href="' + escapeHtml(anchor.target_post_view_url) + '" target="_blank">';
+                html += escapeHtml(anchor.target_post_title);
+                html += '</a>';
+                html += '</td>';
+                // Validate current_anchor_text exists, default to empty string
+                var currentAnchorText = anchor.current_anchor_text || '';
+                if (typeof currentAnchorText !== 'string') {
+                    currentAnchorText = String(currentAnchorText);
+                }
+                
+                // Validate all required IDs
+                var linkId = anchor.link_id || 0;
+                var sourcePostId = anchor.source_post_id || 0;
+                var targetPostId = anchor.target_post_id || 0;
+                
+                // Skip if critical data is missing
+                if (!linkId || !sourcePostId || !targetPostId) {
+                    console.warn('Skipping anchor with missing data:', anchor);
+                    return;
+                }
+                
+                html += '<td><code style="background: #f0f0f1; padding: 4px 8px; border-radius: 3px;">' + escapeHtml(currentAnchorText) + '</code></td>';
+                html += '<td>#' + escapeHtml(String(linkId)) + '</td>';
+                html += '<td>';
+                html += '<button type="button" class="button button-small get-ai-suggestions-btn" ';
+                html += 'data-link-id="' + escapeHtml(String(linkId)) + '" ';
+                html += 'data-source-post-id="' + escapeHtml(String(sourcePostId)) + '" ';
+                html += 'data-target-post-id="' + escapeHtml(String(targetPostId)) + '" ';
+                html += 'data-current-anchor="' + escapeHtml(currentAnchorText) + '">';
+                html += '🤖 Get AI Suggestions';
+                html += '</button>';
+                html += '</td>';
+                html += '</tr>';
+            });
+        }
+        
+        $('#anchor-mgmt-tbody').html(html);
+    }
+    
+    /**
+     * Handle get AI suggestions
+     */
+    function handleGetAISuggestions(e) {
+        if (e) e.preventDefault();
+        
+        var $btn = $(this);
+        var linkId = $btn.data('link-id');
+        var sourcePostId = $btn.data('source-post-id');
+        var targetPostId = $btn.data('target-post-id');
+        var currentAnchor = $btn.data('current-anchor');
+        
+        // Validate inputs
+        if (!linkId || !sourcePostId || !targetPostId) {
+            showNotice('Missing required data. Please refresh the page and try again.', 'error');
+            return;
+        }
+        
+        // Disable button to prevent multiple clicks
+        $btn.prop('disabled', true);
+        var originalText = $btn.html();
+        $btn.html('🔄 Generating...');
+        
+        // Store link ID and post IDs for use in selection handler
+        $('#anchor-suggestions-modal').data('link-id', linkId);
+        $('#anchor-suggestions-modal').data('source-post-id', sourcePostId);
+        $('#anchor-suggestions-modal').data('target-post-id', targetPostId);
+        
+        // Show modal
+        $('#suggestions-loading').show();
+        $('#suggestions-list').hide().html('');
+        $('#anchor-suggestions-modal').show();
+        
+        // Get AI suggestions
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_get_ai_anchor_suggestions',
+                nonce: ssp_ajax.nonce,
+                source_post_id: sourcePostId,
+                target_post_id: targetPostId
+            },
+            timeout: 30000, // 30 second timeout
+            success: function(response) {
+                // Re-enable button
+                $btn.prop('disabled', false);
+                $btn.html(originalText);
+                
+                $('#suggestions-loading').hide();
+                
+                if (response.success && response.data && response.data.suggestions && Array.isArray(response.data.suggestions)) {
+                    var suggestions = response.data.suggestions;
+                    
+                    // Validate suggestions
+                    if (suggestions.length === 0) {
+                        showNotice('AI did not return any suggestions. Please try again or check your API configuration.', 'warning');
+                        $('#anchor-suggestions-modal').hide();
+                        return;
+                    }
+                    
+                    displayAISuggestions(suggestions, currentAnchor || '');
+                    $('#suggestions-list').show();
+                } else {
+                    var errorMsg = response.data || 'Failed to get AI suggestions';
+                    showNotice(errorMsg, 'error');
+                    $('#anchor-suggestions-modal').hide();
+                }
+            },
+            error: function(xhr, status, error) {
+                // Re-enable button
+                $btn.prop('disabled', false);
+                $btn.html(originalText);
+                
+                $('#suggestions-loading').hide();
+                
+                var errorMsg = 'Error getting AI suggestions';
+                if (status === 'timeout') {
+                    errorMsg = 'Request timed out. Please check your API connection and try again.';
+                } else if (xhr.responseJSON && xhr.responseJSON.data) {
+                    errorMsg = xhr.responseJSON.data;
+                }
+                
+                showNotice(errorMsg, 'error');
+                $('#anchor-suggestions-modal').hide();
+            }
+        });
+    }
+    
+    /**
+     * Display AI suggestions
+     */
+    function displayAISuggestions(suggestions, currentAnchor) {
+        if (!suggestions || !Array.isArray(suggestions) || suggestions.length === 0) {
+            $('#suggestions-list').html('<p style="color: #d63638; padding: 20px;">No suggestions available. Please try again or check your AI API configuration.</p>');
+            return;
+        }
+        
+        // Filter out invalid suggestions
+        var validSuggestions = suggestions.filter(function(s) {
+            return s && typeof s === 'string' && s.trim().length > 0 && s.trim().length <= 100;
+        });
+        
+        if (validSuggestions.length === 0) {
+            $('#suggestions-list').html('<p style="color: #d63638; padding: 20px;">All suggestions were invalid. Please try again.</p>');
+            return;
+        }
+        
+        var html = '';
+        
+        // Show current anchor for comparison
+        if (currentAnchor && currentAnchor.trim().length > 0) {
+            html += '<div style="background: #f0f8ff; border-left: 4px solid #0073aa; padding: 12px; margin-bottom: 20px; border-radius: 4px;">';
+            html += '<strong>Current anchor text:</strong> ';
+            html += '<code style="background: #fff; padding: 4px 8px; border-radius: 3px; margin-left: 10px; font-size: 14px;">';
+            html += escapeHtml(currentAnchor);
+            html += '</code>';
+            html += '</div>';
+        }
+        
+        html += '<p style="margin-bottom: 20px; font-weight: 600;">🤖 Select one of the AI-generated anchor options:</p>';
+        html += '<div class="suggestion-list" style="display: flex; flex-direction: column; gap: 12px;">';
+        
+        validSuggestions.forEach(function(suggestion, index) {
+            var trimmedSuggestion = suggestion.trim();
+            if (!trimmedSuggestion) return;
+            
+            // Count words for display
+            var wordCount = trimmedSuggestion.split(/\s+/).length;
+            var wordCountLabel = wordCount >= 2 ? '✓ ' + wordCount + ' words' : '';
+            
+            html += '<div class="suggestion-item" style="border: 2px solid #ddd; padding: 15px; border-radius: 5px; cursor: pointer; transition: all 0.2s; background: #fff; position: relative;" ';
+            html += 'onmouseover="this.style.borderColor=\'#0073aa\'; this.style.backgroundColor=\'#f0f8ff\';" ';
+            html += 'onmouseout="this.style.borderColor=\'#ddd\'; this.style.backgroundColor=\'#fff\';" ';
+            html += 'onclick="jQuery(this).find(\'.select-anchor-suggestion\').click();" ';
+            html += 'data-suggestion="' + escapeHtml(trimmedSuggestion) + '">';
+            html += '<div style="display: flex; justify-content: space-between; align-items: center;">';
+            html += '<div style="flex: 1;">';
+            html += '<div style="margin-bottom: 8px;">';
+            html += '<strong style="color: #0073aa;">Option ' + (index + 1) + ':</strong> ';
+            if (wordCountLabel) {
+                html += '<span style="color: #46b450; font-size: 12px;">' + wordCountLabel + '</span>';
+            }
+            html += '</div>';
+            html += '<code style="background: #f0f0f1; padding: 8px 12px; border-radius: 3px; font-size: 14px; display: inline-block; word-break: break-word; max-width: 80%;">';
+            html += escapeHtml(trimmedSuggestion);
+            html += '</code>';
+            html += '</div>';
+            html += '<button type="button" class="button button-primary button-small select-anchor-suggestion" style="margin-left: 15px;" ';
+            html += 'data-suggestion="' + escapeHtml(trimmedSuggestion) + '">Select This</button>';
+            html += '</div>';
+            html += '</div>';
+        });
+        
+        html += '</div>';
+        
+        $('#suggestions-list').html(html);
+    }
+    
+    /**
+     * Handle select anchor suggestion
+     */
+    function handleSelectAnchorSuggestion(e) {
+        if (e) e.preventDefault();
+        e.stopPropagation();
+        
+        var $btn = $(this);
+        var newAnchorText = $btn.data('suggestion');
+        var linkId = $('#anchor-suggestions-modal').data('link-id');
+        
+        if (!newAnchorText || typeof newAnchorText !== 'string' || newAnchorText.trim() === '') {
+            showNotice('Invalid anchor text selected', 'error');
+            return;
+        }
+        
+        if (!linkId) {
+            showNotice('Missing link ID. Please refresh the page and try again.', 'error');
+            return;
+        }
+        
+        // Validate anchor text length and content
+        newAnchorText = newAnchorText.trim();
+        if (newAnchorText.length < 1 || newAnchorText.length > 100) {
+            showNotice('Anchor text must be between 1 and 100 characters', 'error');
+            return;
+        }
+        
+        // Disable button during update
+        $btn.prop('disabled', true);
+        var originalText = $btn.html();
+        $btn.html('Updating...');
+        
+        // Disable all suggestion buttons to prevent double-click
+        $('.select-anchor-suggestion').prop('disabled', true);
+        
+        // Update anchor text
+        $.ajax({
+            url: ssp_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ssp_update_anchor_text',
+                nonce: ssp_ajax.nonce,
+                link_id: linkId,
+                anchor_text: newAnchorText
+            },
+            timeout: 15000, // 15 second timeout
+            success: function(response) {
+                // Re-enable buttons
+                $btn.prop('disabled', false);
+                $btn.html(originalText);
+                $('.select-anchor-suggestion').prop('disabled', false);
+                
+                if (response.success) {
+                    showNotice('✓ Anchor text updated successfully!', 'success');
+                    $('#anchor-suggestions-modal').hide();
+                    
+                    // Update the table row (escape linkId to prevent XSS)
+                    var $row = $('tr[data-link-id="' + escapeHtml(String(linkId)) + '"]');
+                    if ($row.length > 0) {
+                        // Update anchor text display
+                        $row.find('td:nth-child(3) code').text(newAnchorText);
+                        
+                        // Update button data attribute
+                        $row.find('.get-ai-suggestions-btn').data('current-anchor', newAnchorText);
+                        
+                        // Highlight the row briefly to show update
+                        $row.css('background-color', '#d4edda');
+                        setTimeout(function() {
+                            $row.css('background-color', '');
+                        }, 2000);
+                    } else {
+                        // Row not found - suggest reload
+                        showNotice('Anchor updated but table refresh recommended. Please reload anchors.', 'info');
+                    }
+                } else {
+                    showNotice(response.data || 'Failed to update anchor text', 'error');
+                }
+            },
+            error: function(xhr, status, error) {
+                // Re-enable buttons
+                $btn.prop('disabled', false);
+                $btn.html(originalText);
+                $('.select-anchor-suggestion').prop('disabled', false);
+                
+                var errorMsg = 'Error updating anchor text';
+                if (status === 'timeout') {
+                    errorMsg = 'Update timed out. Please check your connection and try again.';
+                } else if (xhr.responseJSON && xhr.responseJSON.data) {
+                    errorMsg = xhr.responseJSON.data;
+                }
+                
+                showNotice(errorMsg, 'error');
+            }
+        });
+    }
+    
     function escapeHtml(text) {
+        if (text === null || text === undefined) {
+            return '';
+        }
         var map = {
             '&': '&amp;',
             '<': '&lt;',

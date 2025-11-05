@@ -21,6 +21,13 @@ class SSP_Admin_Interface {
     private function __construct() {
         add_action('admin_menu', array($this, 'add_admin_menu'));
         add_action('admin_init', array($this, 'register_settings'));
+        
+        // Add pillar page indicator to posts/pages admin lists
+        add_filter('manage_posts_columns', array($this, 'add_pillar_column'));
+        add_filter('manage_pages_columns', array($this, 'add_pillar_column'));
+        add_action('manage_posts_custom_column', array($this, 'display_pillar_column'), 10, 2);
+        add_action('manage_pages_custom_column', array($this, 'display_pillar_column'), 10, 2);
+        add_action('admin_head', array($this, 'add_pillar_column_styles'));
     }
     
     /**
@@ -69,7 +76,13 @@ class SSP_Admin_Interface {
      * Register settings
      */
     public function register_settings() {
-        register_setting('ssp_settings', 'ssp_settings');
+        // Register settings without sanitization callback to preserve API key exactly as entered
+        // We handle sanitization manually in settings_page() to avoid stripping special characters
+        register_setting('ssp_settings', 'ssp_settings', array(
+            'type' => 'array',
+            'sanitize_callback' => null, // No automatic sanitization - we handle it manually
+            'default' => array()
+        ));
     }
     
     /**
@@ -96,6 +109,8 @@ class SSP_Admin_Interface {
                             <a href="#manage-silos" class="nav-tab">Manage Silos</a>
                             <a href="#link-engine" class="nav-tab">Link Engine</a>
                             <a href="#anchor-report" class="nav-tab">Anchor Report</a>
+                            <a href="#anchor-management" class="nav-tab">Anchor Management</a>
+                            <a href="#orphan-posts" class="nav-tab">Orphan Posts</a>
                             <a href="#exclusions" class="nav-tab">Exclusions</a>
                             <a href="#troubleshoot" class="nav-tab">Troubleshoot</a>
                         </nav>
@@ -115,6 +130,14 @@ class SSP_Admin_Interface {
                             
                             <div id="anchor-report" class="tab-pane">
                                 <?php $this->render_anchor_report(); ?>
+                            </div>
+                            
+                            <div id="anchor-management" class="tab-pane">
+                                <?php $this->render_anchor_management(); ?>
+                            </div>
+                            
+                            <div id="orphan-posts" class="tab-pane">
+                                <?php $this->render_orphan_posts(); ?>
                             </div>
                             
                             <div id="exclusions" class="tab-pane">
@@ -137,25 +160,90 @@ class SSP_Admin_Interface {
      */
     public function settings_page() {
         if (isset($_POST['submit'])) {
-            $ai_provider = sanitize_text_field($_POST['ai_provider']);
-            
-            // Set base URL based on provider
-            $base_url = 'https://api.openai.com/v1';
-            if ($ai_provider === 'openrouter') {
-                $base_url = 'https://openrouter.ai/api/v1';
+            // Verify nonce for security
+            if (!isset($_POST['ssp_settings_nonce']) || !wp_verify_nonce($_POST['ssp_settings_nonce'], 'ssp_settings_save')) {
+                echo '<div class="notice notice-error"><p>Security check failed. Please try again.</p></div>';
+            } else {
+                $ai_provider = sanitize_text_field($_POST['ai_provider']);
+                
+                // Set base URL based on provider
+                $base_url = 'https://api.openai.com/v1';
+                if ($ai_provider === 'openrouter') {
+                    $base_url = 'https://openrouter.ai/api/v1';
+                }
+                
+                // IMPORTANT: Don't use sanitize_text_field on API key as it might strip special characters
+                // API keys can contain hyphens, underscores, etc. Just trim whitespace
+                // WordPress automatically unslashes $_POST data, but be explicit for safety
+                $api_key_raw = isset($_POST['openai_api_key']) ? trim(wp_unslash($_POST['openai_api_key'])) : '';
+                
+                // Debug: Log what we received from POST
+                error_log('SSP AI Settings Save: POST openai_api_key exists: ' . (isset($_POST['openai_api_key']) ? 'YES' : 'NO'));
+                error_log('SSP AI Settings Save: Raw key length: ' . strlen($api_key_raw));
+                error_log('SSP AI Settings Save: Raw key first 5 chars: ' . substr($api_key_raw, 0, 5));
+                
+                // Normalize model against provider to avoid provider/model mismatches
+                $model_raw = sanitize_text_field($_POST['ai_model']);
+                $model_norm = $model_raw;
+                if ($ai_provider === 'openai') {
+                    // If a namespaced model (like openai/gpt-4o) was selected, strip namespace for OpenAI API
+                    if (strpos($model_norm, '/') !== false) {
+                        $parts = explode('/', $model_norm, 2);
+                        $model_norm = end($parts);
+                    }
+                } elseif ($ai_provider === 'openrouter') {
+                    // If a plain OpenAI-style model was selected (e.g., gpt-4o), prefix with openai/
+                    if (strpos($model_norm, '/') === false) {
+                        // Common OpenAI models start with gpt-
+                        if (strpos($model_norm, 'gpt-') === 0 || strpos($model_norm, 'gpt4') === 0) {
+                            $model_norm = 'openai/' . $model_norm;
+                        }
+                    }
+                }
+                
+                $settings = array(
+                    'ai_provider' => $ai_provider,
+                    'ai_model' => $model_norm,
+                    'openai_api_key' => $api_key_raw, // Use raw key, only trimmed
+                    'ai_base_url' => $base_url,
+                    'max_links_per_post' => intval($_POST['max_links_per_post']),
+                    'link_placement' => sanitize_text_field($_POST['link_placement'])
+                );
+                
+                // Debug: Log what we're about to save
+                error_log('SSP AI Settings Save: About to save key with length: ' . strlen($settings['openai_api_key']));
+                
+                $update_result = update_option('ssp_settings', $settings);
+                
+                // Debug: Verify what was actually saved
+                $saved_settings = get_option('ssp_settings', array());
+                $saved_key = isset($saved_settings['openai_api_key']) ? trim($saved_settings['openai_api_key']) : '';
+                error_log('SSP AI Settings Save: update_option result: ' . ($update_result ? 'SUCCESS' : 'NO CHANGE'));
+                error_log('SSP AI Settings Save: Saved key length: ' . strlen($saved_key));
+                error_log('SSP AI Settings Save: Saved key first 5 chars: ' . substr($saved_key, 0, 5));
+                error_log('SSP AI Settings Save: Keys match: ' . ($api_key_raw === $saved_key ? 'YES' : 'NO'));
+                
+                // Reload AI integration settings immediately after saving
+                $ai_integration = SSP_AI_Integration::get_instance();
+                $ai_integration->reload_settings();
+                
+                // Debug: Log key length after save (don't log actual key for security)
+                error_log('SSP AI: Settings saved. API key length: ' . strlen($api_key_raw) . ' characters');
+                error_log('SSP AI: API key validation result: ' . ($ai_integration->is_api_configured() ? 'VALID' : 'INVALID'));
+                
+                // Show success message with API key status
+                $status_message = 'Settings saved!';
+                if (!empty($api_key_raw)) {
+                    $status_message .= ' API key: ' . strlen($api_key_raw) . ' characters saved';
+                    if ($ai_integration->is_api_configured()) {
+                        $status_message .= ' - ✓ Validated successfully!';
+                    } else {
+                        $status_message .= ' - ⚠ Validation failed (check error logs)';
+                    }
+                }
+                
+                echo '<div class="notice notice-success"><p>' . esc_html($status_message) . '</p></div>';
             }
-            
-            $settings = array(
-                'ai_provider' => $ai_provider,
-                'ai_model' => sanitize_text_field($_POST['ai_model']),
-                'openai_api_key' => sanitize_text_field($_POST['openai_api_key']),
-                'ai_base_url' => $base_url,
-                'max_links_per_post' => intval($_POST['max_links_per_post']),
-                'link_placement' => sanitize_text_field($_POST['link_placement'])
-            );
-            
-            update_option('ssp_settings', $settings);
-            echo '<div class="notice notice-success"><p>Settings saved!</p></div>';
         }
         
         $settings = get_option('ssp_settings', array());
@@ -163,7 +251,16 @@ class SSP_Admin_Interface {
         <div class="wrap">
             <h1>Semantic Silo Pro Settings</h1>
             
-            <form method="post" action="">
+            <?php 
+            // Debug: Check current settings before form
+            $current_settings = get_option('ssp_settings', array());
+            $current_key = isset($current_settings['openai_api_key']) ? trim($current_settings['openai_api_key']) : '';
+            if (!empty($current_key)) {
+                echo '<!-- DEBUG: Current API key length in DB: ' . strlen($current_key) . ' -->';
+            }
+            ?>
+            <form method="post" action="" enctype="multipart/form-data">
+                <?php wp_nonce_field('ssp_settings_save', 'ssp_settings_nonce'); ?>
                 <table class="form-table">
                     <tr>
                         <th scope="row">AI Provider</th>
@@ -244,6 +341,8 @@ class SSP_Admin_Interface {
                     <input type="submit" name="submit" class="button-primary" value="Save Settings" />
                     <button type="button" id="test-connection-btn" class="button">Test AI Connection</button>
                 </p>
+                <div id="connection-result" style="margin-top:10px;"></div>
+                <div id="connection-result" aria-live="polite"></div>
             </form>
         </div>
         <?php
@@ -291,6 +390,7 @@ class SSP_Admin_Interface {
         
         $total_silos = SSP_Database::get_silos_count();
         $total_links = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->prefix}ssp_links WHERE status = %s", 'active'));
+        $total_orphans = SSP_Database::get_orphan_posts_count();
         
         ?>
         <div class="ssp-stats-grid">
@@ -301,6 +401,10 @@ class SSP_Admin_Interface {
             <div class="ssp-stat-box">
                 <h3><?php echo intval($total_links); ?></h3>
                 <p>Active Links</p>
+            </div>
+            <div class="ssp-stat-box">
+                <h3><?php echo intval($total_orphans); ?></h3>
+                <p>Orphan Posts</p>
             </div>
             <div class="ssp-stat-box">
                 <h3>0</h3>
@@ -327,7 +431,7 @@ class SSP_Admin_Interface {
                 <h3>Pillar Posts</h3>
                 <div class="ssp-checkbox-list" style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; background: #fff;">
                     <?php
-                    $posts = get_posts(array(
+                    $all_posts = get_posts(array(
                         'post_type' => array('post', 'page'),
                         'post_status' => 'publish',
                         'numberposts' => 100,
@@ -335,15 +439,47 @@ class SSP_Admin_Interface {
                         'order' => 'ASC'
                     ));
                     
-                    foreach ($posts as $post) {
-                        echo '<label style="display: block; margin: 5px 0;">';
-                        echo '<input type="checkbox" name="pillar_posts[]" value="' . esc_attr($post->ID) . '" style="margin-right: 8px;">';
-                        echo esc_html($post->post_title) . ' (ID: ' . esc_html($post->ID) . ')';
-                        echo '</label>';
+                    // Separate pages and posts
+                    $pages = array();
+                    $posts_only = array();
+                    $front_page_id = intval(get_option('page_on_front'));
+                    
+                    foreach ($all_posts as $post) {
+                        if ($post->post_type === 'page') {
+                            $pages[] = $post;
+                        } else {
+                            $posts_only[] = $post;
+                        }
+                    }
+                    
+                    // Display Pages section
+                    if (!empty($pages)) {
+                        echo '<div style="font-weight: 600; padding: 8px 0;">Pages (' . count($pages) . ')</div>';
+                        foreach ($pages as $post) {
+                            $is_home = ($front_page_id && $post->ID == $front_page_id);
+                            echo '<label style="display: block; margin: 5px 0;">';
+                            echo '<input type="radio" name="pillar_post" value="' . esc_attr($post->ID) . '" style="margin-right: 8px;">';
+                            echo esc_html($post->post_title) . ($is_home ? ' (Home)' : '') . ' (ID: ' . esc_html($post->ID) . ')';
+                            echo '</label>';
+                        }
+                    }
+                    
+                    // Display Posts section
+                    if (!empty($posts_only)) {
+                        if (!empty($pages)) {
+                            echo '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;"></div>';
+                        }
+                        echo '<div style="font-weight: 600; padding: 8px 0;">Posts (' . count($posts_only) . ')</div>';
+                        foreach ($posts_only as $post) {
+                            echo '<label style="display: block; margin: 5px 0;">';
+                            echo '<input type="radio" name="pillar_post" value="' . esc_attr($post->ID) . '" style="margin-right: 8px;">';
+                            echo esc_html($post->post_title) . ' (ID: ' . esc_html($post->ID) . ')';
+                            echo '</label>';
+                        }
                     }
                     ?>
                 </div>
-                <p class="description">Check the posts that will serve as pillar posts for your silos.</p>
+                <p class="description">Select one post that will serve as the pillar post for your silo.</p>
             </div>
             
             <!-- Manual Setup - Support Posts Selection -->
@@ -351,7 +487,7 @@ class SSP_Admin_Interface {
                 <h3>Support Posts</h3>
                 <div class="ssp-checkbox-list" style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; background: #fff;">
                     <?php
-                    $posts = get_posts(array(
+                    $all_posts = get_posts(array(
                         'post_type' => array('post', 'page'),
                         'post_status' => 'publish',
                         'numberposts' => 100,
@@ -359,11 +495,43 @@ class SSP_Admin_Interface {
                         'order' => 'ASC'
                     ));
                     
-                    foreach ($posts as $post) {
-                        echo '<label style="display: block; margin: 5px 0;">';
-                        echo '<input type="checkbox" name="support_posts[]" value="' . esc_attr($post->ID) . '" style="margin-right: 8px;">';
-                        echo esc_html($post->post_title) . ' (ID: ' . esc_html($post->ID) . ')';
-                        echo '</label>';
+                    // Separate pages and posts
+                    $pages = array();
+                    $posts_only = array();
+                    $front_page_id = intval(get_option('page_on_front'));
+                    
+                    foreach ($all_posts as $post) {
+                        if ($post->post_type === 'page') {
+                            $pages[] = $post;
+                        } else {
+                            $posts_only[] = $post;
+                        }
+                    }
+                    
+                    // Display Pages section
+                    if (!empty($pages)) {
+                        echo '<div style="font-weight: 600; padding: 8px 0;">Pages (' . count($pages) . ')</div>';
+                        foreach ($pages as $post) {
+                            $is_home = ($front_page_id && $post->ID == $front_page_id);
+                            echo '<label style="display: block; margin: 5px 0;">';
+                            echo '<input type="checkbox" name="support_posts[]" value="' . esc_attr($post->ID) . '" style="margin-right: 8px;">';
+                            echo esc_html($post->post_title) . ($is_home ? ' (Home)' : '') . ' (ID: ' . esc_html($post->ID) . ')';
+                            echo '</label>';
+                        }
+                    }
+                    
+                    // Display Posts section
+                    if (!empty($posts_only)) {
+                        if (!empty($pages)) {
+                            echo '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;"></div>';
+                        }
+                        echo '<div style="font-weight: 600; padding: 8px 0;">Posts (' . count($posts_only) . ')</div>';
+                        foreach ($posts_only as $post) {
+                            echo '<label style="display: block; margin: 5px 0;">';
+                            echo '<input type="checkbox" name="support_posts[]" value="' . esc_attr($post->ID) . '" style="margin-right: 8px;">';
+                            echo esc_html($post->post_title) . ' (ID: ' . esc_html($post->ID) . ')';
+                            echo '</label>';
+                        }
                     }
                     ?>
                 </div>
@@ -530,8 +698,19 @@ class SSP_Admin_Interface {
                 ?>
                 <tr>
                     <td><strong><?php echo esc_html($silo->id); ?></strong></td>
-                    <td><?php echo esc_html($silo->name); ?></td>
-                    <td><?php echo $pillar_post ? esc_html($pillar_post->post_title) : 'N/A'; ?></td>
+                    <td><?php echo esc_html($silo->name . (!$pillar_post ? ' (no pillar)' : '')); ?></td>
+                    <td>
+                        <?php 
+                        if ($pillar_post) {
+                            $fp = intval(get_option('page_on_front'));
+                            $type_label = ucfirst(get_post_type($pillar_post)) ?: 'Post';
+                            $home_tag = ($fp && $pillar_post->ID == $fp) ? ' (Home)' : '';
+                            echo esc_html($pillar_post->post_title . " [{$type_label}{$home_tag}]");
+                        } else {
+                            echo 'No Pillar';
+                        }
+                        ?>
+                    </td>
                     <td><?php echo esc_html(ucfirst(str_replace('_', ' ', $silo->setup_method))); ?></td>
                     <td><?php echo esc_html($post_count); ?></td>
                     <td><?php echo esc_html($link_count); ?></td>
@@ -692,12 +871,17 @@ class SSP_Admin_Interface {
             </div>
             
             <!-- Anchor Details Modal -->
-            <div id="anchor-details-modal" class="ssp-modal" style="display: none;">
-                <div class="ssp-modal-content" style="max-width: 800px;">
-                    <span class="ssp-modal-close">&times;</span>
-                    <h2 id="anchor-modal-title">Anchor Details</h2>
-                    <div id="anchor-modal-body">
+            <div id="anchor-details-modal" class="ssp-modal-overlay" style="display: none;" role="dialog" aria-modal="true">
+                <div class="ssp-modal-content" style="max-width: 900px;" tabindex="-1" aria-labelledby="anchor-modal-title">
+                    <div class="ssp-modal-header">
+                        <h2 id="anchor-modal-title">Anchor Details</h2>
+                        <button type="button" class="ssp-modal-close" aria-label="Close">&times;</button>
+                    </div>
+                    <div class="ssp-modal-body" id="anchor-modal-body">
                         <!-- Details loaded via AJAX -->
+                    </div>
+                    <div class="ssp-modal-footer">
+                        <button type="button" class="button button-primary ssp-modal-dismiss">Close</button>
                     </div>
                 </div>
             </div>
@@ -805,6 +989,307 @@ class SSP_Admin_Interface {
     }
     
     /**
+     * Render anchor management page
+     */
+    private function render_anchor_management() {
+        ?>
+        <div class="ssp-anchor-management">
+            <h3>Anchor Management - Preview & Regenerate Anchors</h3>
+            <p class="description">View all anchors for a silo and regenerate them using AI. Select a silo to see all links and their anchor texts.</p>
+            
+            <!-- Silo Selector -->
+            <div class="ssp-form-section" style="margin-bottom: 20px;">
+                <label style="margin-right: 15px;">
+                    <strong>Select Silo:</strong>
+                    <select id="anchor-mgmt-silo-select" class="ssp-select" style="min-width: 300px;">
+                        <option value="">-- Select a Silo --</option>
+                        <?php
+                        $silos = SSP_Database::get_silos();
+                        foreach ($silos as $silo) {
+                            echo '<option value="' . esc_attr($silo->id) . '">' . esc_html($silo->name) . '</option>';
+                        }
+                        ?>
+                    </select>
+                </label>
+                <button id="load-anchor-management" class="button button-primary" disabled>Load Anchors</button>
+            </div>
+            
+            <!-- Loading State -->
+            <div id="anchor-mgmt-loading" style="display: none; text-align: center; padding: 40px;">
+                <p>Loading anchors...</p>
+            </div>
+            
+            <!-- Anchor List Table -->
+            <div id="anchor-mgmt-content" style="display: none;">
+                <div class="ssp-form-section">
+                    <table class="wp-list-table widefat fixed striped" id="anchor-management-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 20%;">Source Post</th>
+                                <th style="width: 20%;">Target Post</th>
+                                <th style="width: 25%;">Current Anchor Text</th>
+                                <th style="width: 15%;">Link ID</th>
+                                <th style="width: 20%;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="anchor-mgmt-tbody">
+                            <!-- Content loaded via AJAX -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- AI Suggestions Modal -->
+            <div id="anchor-suggestions-modal" class="ssp-modal-overlay" style="display: none;" role="dialog" aria-modal="true">
+                <div class="ssp-modal-content" style="max-width: 700px;" tabindex="-1" aria-labelledby="suggestions-modal-title">
+                    <div class="ssp-modal-header">
+                        <h2 id="suggestions-modal-title">AI Anchor Suggestions</h2>
+                        <button type="button" class="ssp-modal-close" aria-label="Close">&times;</button>
+                    </div>
+                    <div class="ssp-modal-body" id="suggestions-modal-body">
+                        <p id="suggestions-loading" style="text-align: center; padding: 20px;">Generating AI suggestions...</p>
+                        <div id="suggestions-list" style="display: none;">
+                            <!-- AI suggestions will be shown here -->
+                        </div>
+                    </div>
+                    <div class="ssp-modal-footer">
+                        <button type="button" class="button ssp-modal-dismiss">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <?php
+    }
+    
+    /**
+     * Render orphan posts page
+     */
+    private function render_orphan_posts() {
+        global $wpdb;
+        
+        // Get orphan posts
+        $orphan_posts = SSP_Database::get_orphan_posts(100, 0);
+        $total_orphans = SSP_Database::get_orphan_posts_count();
+        
+        // Get all silos for assignment dropdown (use high limit to get all)
+        $silos = SSP_Database::get_silos(10000, 0);
+        ?>
+        <div class="ssp-orphan-posts">
+            <h3>Orphan Posts & Pages</h3>
+            <p class="description">
+                Posts and pages that are not assigned to any silo. These may be posts that were recommended by AI but not selected, or posts that were never assigned to a silo.
+            </p>
+            
+            <!-- Statistics -->
+            <div class="ssp-form-section" style="background: #f9f9f9; padding: 15px; margin-bottom: 20px; border-left: 3px solid #0073aa;">
+                <h4>📊 Statistics</h4>
+                <p style="margin: 0;">
+                    <strong>Total Orphan Posts:</strong> <span id="ssp-orphan-total"><?php echo esc_html($total_orphans); ?></span>
+                    (Posts and pages not in any silo)
+                </p>
+            </div>
+            
+            <!-- Bulk Actions -->
+            <div class="ssp-form-section" style="background: #fff; padding: 15px; margin-bottom: 20px; border: 1px solid #ddd;">
+                <h4>⚡ Bulk Actions</h4>
+                <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+                    <label>
+                        <strong>Assign Selected to Silo:</strong>
+                        <select id="assign-orphan-silo-select" class="ssp-select" style="margin-left: 10px; width: 250px;">
+                            <option value="">Select a silo...</option>
+                            <?php foreach ($silos as $silo): ?>
+                                <option value="<?php echo esc_attr($silo->id); ?>">
+                                    <?php echo esc_html($silo->name); ?> (ID: <?php echo esc_html($silo->id); ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
+                    <button type="button" id="assign-orphans-btn" class="button button-primary" disabled>Assign Selected Posts</button>
+                    <button type="button" id="select-all-orphans-btn" class="button">Select All</button>
+                    <button type="button" id="deselect-all-orphans-btn" class="button">Deselect All</button>
+                </div>
+            </div>
+            
+            <!-- Orphan Posts List -->
+            <div class="ssp-form-section">
+                <?php if (empty($orphan_posts)): ?>
+                    <div class="ssp-empty-state">
+                        <p>🎉 Great! No orphan posts found. All your posts are assigned to silos.</p>
+                    </div>
+                <?php else: ?>
+                    <?php 
+                    // Separate pages and posts
+                    $front_page_id = intval(get_option('page_on_front'));
+                    $pages = array();
+                    $posts_only = array();
+                    foreach ($orphan_posts as $post) {
+                        if ($post->post_type === 'page') {
+                            $pages[] = $post;
+                        } else {
+                            $posts_only[] = $post;
+                        }
+                    }
+                    ?>
+                    <table class="wp-list-table widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th style="width: 40px;">
+                                    <input type="checkbox" id="select-all-orphans" />
+                                </th>
+                                <th style="width: 70px;">ID</th>
+                                <th style="width: 100px;">Type</th>
+                                <th style="min-width: 300px;">Title</th>
+                                <th style="width: 120px;">Post Date</th>
+                                <th style="width: 130px;">Author</th>
+                                <th style="width: 280px; min-width: 260px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="orphan-posts-tbody">
+                            <?php if (!empty($pages)): ?>
+                                <!-- Pages Section Header -->
+                                <tr class="ssp-section-header">
+                                    <td colspan="7" style="font-weight: 600; padding: 8px 15px;">
+                                        Pages (<?php echo count($pages); ?>)
+                                    </td>
+                                </tr>
+                                <?php foreach ($pages as $post): ?>
+                                    <?php
+                                    $author = get_userdata($post->post_author);
+                                    $post_type_obj = get_post_type_object($post->post_type);
+                                    $post_type_label = ($post_type_obj && isset($post_type_obj->labels->singular_name)) 
+                                        ? $post_type_obj->labels->singular_name 
+                                        : ucfirst($post->post_type);
+                                    $is_home = ($front_page_id && $post->ID == $front_page_id);
+                                    ?>
+                                    <tr data-post-id="<?php echo esc_attr($post->ID); ?>">
+                                        <td>
+                                            <input type="checkbox" class="orphan-post-checkbox" value="<?php echo esc_attr($post->ID); ?>" />
+                                        </td>
+                                        <td><strong>#<?php echo esc_html($post->ID); ?></strong></td>
+                                        <td>
+                                            <?php echo esc_html($post_type_label . ($is_home ? ' (Home)' : '')); ?>
+                                        </td>
+                                        <td>
+                                            <strong>
+                                                <a href="<?php echo esc_url(get_edit_post_link($post->ID)); ?>" target="_blank">
+                                                    <?php echo esc_html($post->post_title ?: '(No Title)'); ?>
+                                                </a>
+                                            </strong>
+                                            <?php if (!$post->post_title): ?>
+                                                <span style="color: #999; font-style: italic;">(No Title)</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td><?php 
+                                            $post_date = !empty($post->post_date) ? strtotime($post->post_date) : false;
+                                            echo $post_date ? esc_html(date('Y-m-d', $post_date)) : 'N/A';
+                                        ?></td>
+                                        <td><?php echo $author ? esc_html($author->display_name) : 'Unknown'; ?></td>
+                                        <td>
+                                            <div class="ssp-orphan-actions">
+                                                <select class="assign-single-orphan-silo" data-post-id="<?php echo esc_attr($post->ID); ?>">
+                                                    <option value="">Assign to silo...</option>
+                                                    <?php foreach ($silos as $silo): ?>
+                                                        <option value="<?php echo esc_attr($silo->id); ?>">
+                                                            <?php echo esc_html($silo->name); ?>
+                                                        </option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                                <button type="button" class="button button-small assign-single-orphan-btn" 
+                                                        data-post-id="<?php echo esc_attr($post->ID); ?>" 
+                                                        style="display: none;">
+                                                    Assign
+                                                </button>
+                                                <a href="<?php echo esc_url(get_permalink($post->ID)); ?>" 
+                                                   target="_blank" 
+                                                   class="button button-small" 
+                                                   title="View Post">
+                                                    👁️ View
+                                                </a>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                            
+                            <?php if (!empty($posts_only)): ?>
+                                <!-- Posts Section Header -->
+                                <tr class="ssp-section-header">
+                                    <td colspan="7" style="font-weight: 600; padding: 8px 15px;">
+                                        Posts (<?php echo count($posts_only); ?>)
+                                    </td>
+                                </tr>
+                                <?php foreach ($posts_only as $post): ?>
+                                    <?php
+                                    $author = get_userdata($post->post_author);
+                                    $post_type_obj = get_post_type_object($post->post_type);
+                                    $post_type_label = ($post_type_obj && isset($post_type_obj->labels->singular_name)) 
+                                        ? $post_type_obj->labels->singular_name 
+                                        : ucfirst($post->post_type);
+                                    ?>
+                                    <tr data-post-id="<?php echo esc_attr($post->ID); ?>">
+                                        <td>
+                                            <input type="checkbox" class="orphan-post-checkbox" value="<?php echo esc_attr($post->ID); ?>" />
+                                        </td>
+                                        <td><strong>#<?php echo esc_html($post->ID); ?></strong></td>
+                                        <td>
+                                            <?php echo esc_html($post_type_label); ?>
+                                        </td>
+                                        <td>
+                                            <strong>
+                                                <a href="<?php echo esc_url(get_edit_post_link($post->ID)); ?>" target="_blank">
+                                                    <?php echo esc_html($post->post_title ?: '(No Title)'); ?>
+                                                </a>
+                                            </strong>
+                                            <?php if (!$post->post_title): ?>
+                                                <span style="color: #999; font-style: italic;">(No Title)</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td><?php 
+                                            $post_date = !empty($post->post_date) ? strtotime($post->post_date) : false;
+                                            echo $post_date ? esc_html(date('Y-m-d', $post_date)) : 'N/A';
+                                        ?></td>
+                                        <td><?php echo $author ? esc_html($author->display_name) : 'Unknown'; ?></td>
+                                        <td>
+                                            <div class="ssp-orphan-actions">
+                                                <select class="assign-single-orphan-silo" data-post-id="<?php echo esc_attr($post->ID); ?>">
+                                                    <option value="">Assign to silo...</option>
+                                                    <?php foreach ($silos as $silo): ?>
+                                                        <option value="<?php echo esc_attr($silo->id); ?>">
+                                                            <?php echo esc_html($silo->name); ?>
+                                                        </option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                                <button type="button" class="button button-small assign-single-orphan-btn" 
+                                                        data-post-id="<?php echo esc_attr($post->ID); ?>" 
+                                                        style="display: none;">
+                                                    Assign
+                                                </button>
+                                                <a href="<?php echo esc_url(get_permalink($post->ID)); ?>" 
+                                                   target="_blank" 
+                                                   class="button button-small" 
+                                                   title="View Post">
+                                                    👁️ View
+                                                </a>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                    
+                    <?php if ($total_orphans > 100): ?>
+                        <p class="description" style="margin-top: 15px;">
+                            ⚠️ Showing first 100 orphan posts. Total: <?php echo esc_html($total_orphans); ?> posts.
+                        </p>
+                    <?php endif; ?>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+    }
+    
+    /**
      * Render troubleshoot page
      */
     private function render_troubleshoot() {
@@ -839,5 +1324,89 @@ class SSP_Admin_Interface {
             </div>
         </div>
         <?php
+    }
+    
+    /**
+     * Add pillar page column to posts/pages admin lists
+     */
+    public function add_pillar_column($columns) {
+        // Insert after title column
+        $new_columns = array();
+        foreach ($columns as $key => $value) {
+            $new_columns[$key] = $value;
+            if ($key === 'title') {
+                $new_columns['ssp_pillar'] = 'Pillar Page';
+            }
+        }
+        return $new_columns;
+    }
+    
+    /**
+     * Display pillar page indicator in admin list
+     */
+    public function display_pillar_column($column, $post_id) {
+        if ($column === 'ssp_pillar') {
+            // Optimize: Get silo info in one query instead of two
+            $silo_info = SSP_Database::get_pillar_silo_info($post_id);
+            if (!empty($silo_info['silos'])) {
+                $tooltip = isset($silo_info['tooltip']) ? $silo_info['tooltip'] : 'Pillar page';
+                echo '<span class="ssp-pillar-badge" title="' . esc_attr($tooltip) . '">';
+                echo '<span class="ssp-pillar-badge-icon">📌</span>';
+                echo '<span class="ssp-pillar-badge-text">Pillar Page</span>';
+                echo '</span>';
+            } else {
+                echo '—';
+            }
+        }
+    }
+    
+    /**
+     * Add CSS styles for pillar page badge
+     */
+    public function add_pillar_column_styles() {
+        $screen = get_current_screen();
+        // Check for both post and page list screens (screen IDs start with 'edit-')
+        if ($screen && (strpos($screen->id, 'edit-post') === 0 || strpos($screen->id, 'edit-page') === 0)) {
+            ?>
+            <style>
+                .ssp-pillar-badge {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: #fff;
+                    padding: 4px 12px;
+                    border-radius: 12px;
+                    font-size: 12px;
+                    font-weight: 500;
+                    line-height: 1.4;
+                    white-space: nowrap;
+                    box-shadow: 0 2px 4px rgba(102, 126, 234, 0.2);
+                }
+                
+                .ssp-pillar-badge-icon {
+                    font-size: 14px;
+                    line-height: 1;
+                }
+                
+                .ssp-pillar-badge-text {
+                    font-size: 11px;
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                }
+                
+                .column-ssp_pillar {
+                    width: 140px;
+                }
+                
+                /* Hover effect */
+                .ssp-pillar-badge:hover {
+                    box-shadow: 0 3px 6px rgba(102, 126, 234, 0.3);
+                    transform: translateY(-1px);
+                    transition: all 0.2s ease;
+                }
+            </style>
+            <?php
+        }
     }
 }
