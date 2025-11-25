@@ -607,7 +607,7 @@ Include only the top 20 most relevant posts.";
                     'content' => $prompt
                 )
             ),
-            'temperature' => 0.7
+            'temperature' => 1
         );
         
         // Add the correct parameter based on model and API
