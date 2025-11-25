@@ -554,7 +554,20 @@ Include only the top 20 most relevant posts.";
             
             // Check if model is a newer OpenAI model that requires max_completion_tokens
             // This includes: gpt-4o, gpt-4o-mini, o1, o1-preview, o1-mini, o3-mini, and any with date stamps
-            $newer_models = array('gpt-4o', 'gpt-4o-mini', 'o1', 'o1-preview', 'o1-mini', 'o3-mini', 'o3');
+            $newer_models = array(
+                'gpt-4o',
+                'gpt-4o-mini',
+                'o1',
+                'o1-preview',
+                'o1-mini',
+                'o3-mini',
+                'o3',
+                'gpt-5',
+                'gpt-5-nano',
+                'gpt-5-mini',
+                'gpt-5-pro',
+                'gpt-5-omni'
+            );
             
             foreach ($newer_models as $newer_model) {
                 $newer_model_lower = strtolower($newer_model);
