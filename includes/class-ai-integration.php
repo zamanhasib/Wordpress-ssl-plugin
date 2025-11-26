@@ -496,343 +496,170 @@ Include only the top 20 most relevant posts.";
     }
     
     /**
-     * Make API request to OpenAI/OpenRouter
-     */
-    private function make_api_request($prompt, $max_tokens = 1000) {
-        // Reset last error
-        $this->last_error = '';
-        
-        // Rate limiting check
-        if (!$this->check_rate_limit()) {
-            $this->last_error = 'Rate limit exceeded. Please try again later.';
-            error_log('SSP AI: Rate limit exceeded');
-            return false;
-        }
-        
-        if (empty($this->api_key) || !$this->validate_api_key()) {
-            $this->last_error = 'Invalid or missing API key. Please check your API key in Settings.';
-            error_log('SSP AI: Invalid or missing API key');
-            return false;
-        }
-        
-        // CRITICAL: Do NOT sanitize API key in Authorization header - it can strip special characters
-        // The key should be used exactly as stored (already trimmed when loaded)
-        // Ensure API key is properly trimmed but not modified
-        $api_key_clean = trim($this->api_key);
-        
-        $headers = array(
-            'Authorization' => 'Bearer ' . $api_key_clean,
-            'Content-Type' => 'application/json'
-        );
-        
-        // Add OpenRouter-recommended headers for attribution/rate-limiting context
-        if (!empty($this->api_base_url) && strpos($this->api_base_url, 'openrouter.ai') !== false) {
-            // X-Title is recommended; Referer helps attribute the app
-            $headers['X-Title'] = 'Semantic Silo Pro';
-            if (function_exists('home_url')) {
-                $headers['HTTP-Referer'] = home_url('/');
-            }
-        }
-        
-        // Debug: Log API request details (without exposing full key)
-        error_log('SSP AI API Request: URL: ' . $this->api_base_url . '/chat/completions');
-        error_log('SSP AI API Request: Model: ' . $this->model);
-        error_log('SSP AI API Request: Key length: ' . strlen($api_key_clean));
-        error_log('SSP AI API Request: Key starts with: ' . substr($api_key_clean, 0, 10));
-        error_log('SSP AI API Request: Key ends with: ' . substr($api_key_clean, -5));
-        error_log('SSP AI API Request: Max tokens: ' . $max_tokens);
-        
-        // Determine which parameter to use based on API provider and model
-        // OpenAI API: Newer models (gpt-4o, gpt-4o-mini, o1, etc.) require max_completion_tokens
-        // OpenAI API: Older models (gpt-3.5-turbo, gpt-4) use max_tokens
-        // OpenRouter: Typically uses max_tokens for all models
-        $use_max_completion_tokens = false;
-        $is_openai_api = (strpos($this->api_base_url, 'api.openai.com') !== false);
-        
-        if ($is_openai_api) {
-            $model_lower = strtolower(trim($this->model));
-            
-            // Check if model is a newer OpenAI model that requires max_completion_tokens
-            // This includes: gpt-4o, gpt-4o-mini, o1, o1-preview, o1-mini, o3-mini, and any with date stamps
-            $newer_models = array(
-                'gpt-4o',
-                'gpt-4o-mini',
-                'o1',
-                'o1-preview',
-                'o1-mini',
-                'o3-mini',
-                'o3',
-                'gpt-5',
-                'gpt-5-nano',
-                'gpt-5-mini',
-                'gpt-5-pro',
-                'gpt-5-omni'
-            );
-            
-            foreach ($newer_models as $newer_model) {
-                $newer_model_lower = strtolower($newer_model);
-                // Check if model contains the newer model name
-                if (strpos($model_lower, $newer_model_lower) !== false) {
-                    $use_max_completion_tokens = true;
-                    error_log('SSP AI API: Detected newer model pattern: ' . $newer_model . ' in model: ' . $this->model);
-                    break;
-                }
-            }
-            
-            // Also check if model name contains date stamps (like gpt-4o-2024-08-06)
-            // These are newer model versions that require max_completion_tokens
-            if (!$use_max_completion_tokens && preg_match('/\d{4}-\d{2}-\d{2}/', $model_lower)) {
-                $use_max_completion_tokens = true;
-                error_log('SSP AI API: Detected date-stamped model (newer version): ' . $this->model);
-            }
-            
-            // If still not detected but model starts with gpt-4o or o1 or o3, use max_completion_tokens
-            if (!$use_max_completion_tokens) {
-                if (strpos($model_lower, 'gpt-4o') === 0 || strpos($model_lower, 'o1') === 0 || strpos($model_lower, 'o3') === 0) {
-                    $use_max_completion_tokens = true;
-                    error_log('SSP AI API: Detected newer model by prefix: ' . $this->model);
-                }
-            }
-            
-            // Debug: Log final decision
-            error_log('SSP AI API: Model detection result - use_max_completion_tokens: ' . ($use_max_completion_tokens ? 'YES' : 'NO') . ' for model: ' . $this->model);
-        }
-        
-        // Build request body
-        $body = array(
-            'model' => $this->model,
-            'messages' => array(
-                array(
-                    'role' => 'user',
-                    'content' => $prompt
-                )
-            ),
-            'temperature' => 1
-        );
-        
-        // Add the correct parameter based on model and API
-        if ($use_max_completion_tokens) {
-            $body['max_completion_tokens'] = $max_tokens;
-            error_log('SSP AI API Request: Using max_completion_tokens for model: ' . $this->model);
-        } else {
-            $body['max_tokens'] = $max_tokens;
-            error_log('SSP AI API Request: Using max_tokens for model: ' . $this->model);
-        }
-        
-        $args = array(
-            'headers' => $headers,
-            'body' => json_encode($body),
-            'timeout' => 30
-        );
-        
-        $api_url = $this->api_base_url . '/chat/completions';
-        $response = wp_remote_post($api_url, $args);
-        
-        if (is_wp_error($response)) {
-            $error_message = $response->get_error_message();
-            $error_code = $response->get_error_code();
-            error_log('SSP AI API WP_Error: Code: ' . $error_code . ', Message: ' . $error_message);
-            
-            // Provide more detailed error info
-            if ($error_code === 'http_request_failed') {
-                $this->last_error = 'Network connection failed. Check server connectivity to ' . $this->api_base_url . '. Error: ' . $error_message;
-                error_log('SSP AI API: Network connection failed. Check server connectivity to ' . $this->api_base_url);
-            } else {
-                $this->last_error = 'Connection error: ' . $error_code . ' - ' . $error_message;
-            }
-            
-            return false;
-        }
-        
-        $response_code = wp_remote_retrieve_response_code($response);
-        $response_body = wp_remote_retrieve_body($response);
-        
-        // Debug: Log response code
-        error_log('SSP AI API Response: HTTP Code: ' . ($response_code ?: 'NULL/EMPTY'));
-        
-        // Check for invalid response code (null, false, or non-200)
-        if (empty($response_code) || $response_code !== 200) {
-            // Handle case where response_code might be null/empty
-            if (empty($response_code)) {
-                $this->last_error = 'Invalid API response: No HTTP response code received. Response body: ' . substr($response_body, 0, 200);
-                error_log('SSP AI API: No HTTP response code received');
-                return false;
-            }
-            // Decode error response
-            $error_data = json_decode($response_body, true);
-            
-            // Extract error message from API response
-            $error_message = 'Unknown error';
-            $full_error_text = '';
-            
-            if (isset($error_data['error'])) {
-                if (is_array($error_data['error'])) {
-                    $error_message = $error_data['error']['message'] ?? $error_data['error']['type'] ?? 'API error';
-                    // Also check for nested error info
-                    if (isset($error_data['error']['message'])) {
-                        $full_error_text = $error_data['error']['message'];
-                    }
-                } else {
-                    $error_message = $error_data['error'];
-                    $full_error_text = $error_data['error'];
-                }
-            } elseif (!empty($response_body)) {
-                // If JSON decode failed, use raw response body
-                $error_message = substr($response_body, 0, 200);
-                $full_error_text = substr($response_body, 0, 500);
-            }
-            
-            // Use full error text for detection if available, otherwise use error_message
-            $error_text_for_detection = !empty($full_error_text) ? $full_error_text : $error_message;
-            
-            // Handle specific error: max_tokens not supported, use max_completion_tokens instead
-            // Check for multiple variations of this error message
-            $error_lower = strtolower($error_text_for_detection);
-            
-            // Check for max_tokens error - be very permissive in detection
-            // If it's a 400 error mentioning max_tokens and (max_completion_tokens OR unsupported), it's our error
-            $has_max_tokens = strpos($error_lower, 'max_tokens') !== false;
-            $has_max_completion_tokens = strpos($error_lower, 'max_completion_tokens') !== false;
-            $has_unsupported = strpos($error_lower, 'unsupported') !== false || strpos($error_lower, 'not supported') !== false;
-            
-            $is_max_tokens_error = (
-                $response_code === 400 && 
-                $has_max_tokens && 
-                ($has_max_completion_tokens || $has_unsupported)
-            );
-            
-            // Debug: Log detection components
-            error_log('SSP AI API: Error detection components - has_max_tokens: ' . ($has_max_tokens ? 'YES' : 'NO') . 
-                     ', has_max_completion_tokens: ' . ($has_max_completion_tokens ? 'YES' : 'NO') . 
-                     ', has_unsupported: ' . ($has_unsupported ? 'YES' : 'NO'));
-            
-            // Debug: Log error detection
-            error_log('SSP AI API: Error detection - is_max_tokens_error: ' . ($is_max_tokens_error ? 'YES' : 'NO'));
-            error_log('SSP AI API: Error message: ' . $error_message);
-            error_log('SSP AI API: Full error text length: ' . strlen($error_text_for_detection));
-            if ($is_max_tokens_error) {
-                error_log('SSP AI API: Error message matched max_tokens error pattern');
-            }
-            
-            if ($is_max_tokens_error) {
-                error_log('SSP AI API: Detected max_tokens error, retrying with max_completion_tokens');
-                error_log('SSP AI API: Original error message: ' . $error_message);
-                // Retry with max_completion_tokens instead
-                // Create a fresh body array to ensure we remove any existing max_tokens or max_completion_tokens
-                $retry_body = array(
-                    'model' => $this->model,
-                    'messages' => array(
-                        array(
-                            'role' => 'user',
-                            'content' => $prompt
-                        )
-                    ),
-                    'temperature' => 0.7,
-                    'max_completion_tokens' => $max_tokens
-                );
-                
-                $retry_args = array(
-                    'headers' => $headers,
-                    'body' => json_encode($retry_body),
-                    'timeout' => 30
-                );
-                
-                $retry_response = wp_remote_post($api_url, $retry_args);
-                
-                if (!is_wp_error($retry_response)) {
-                    $retry_response_code = wp_remote_retrieve_response_code($retry_response);
-                    $retry_response_body = wp_remote_retrieve_body($retry_response);
-                    
-                    if ($retry_response_code === 200) {
-                        error_log('SSP AI API: Retry with max_completion_tokens succeeded');
-                        // Continue with normal response processing
-                        $response_code = $retry_response_code;
-                        $response_body = $retry_response_body;
-                        // Break out of error handling and continue to success processing below
-                        // We've successfully retried, so we can now process the response normally
-                        // The outer if block (line 612) will be bypassed because response_code is now 200
-                    } else {
-                        // Retry also failed
-                        $this->last_error = 'API Error ' . $retry_response_code . ': ' . $error_message;
-                        error_log('SSP AI API HTTP Error on retry ' . $retry_response_code . ': ' . $error_message);
-                        return false;
-                    }
-                } else {
-                    // Retry failed with network error
-                    $this->last_error = 'API Error ' . $response_code . ': ' . $error_message . ' (Retry also failed)';
-                    error_log('SSP AI API HTTP Error ' . $response_code . ': ' . $error_message);
-                    return false;
-                }
-            } else {
-                // Normal error, don't retry
-                $this->last_error = 'API Error ' . $response_code . ': ' . $error_message;
-                error_log('SSP AI API HTTP Error ' . $response_code . ': ' . $error_message);
-                error_log('SSP AI API Error Response Body: ' . substr($response_body, 0, 500));
-                return false;
-            }
-        }
-        
-        // If we reach here, either:
-        // 1. Original request succeeded (response_code === 200)
-        // 2. Retry succeeded (response_code was updated to 200 in retry block above)
-        // Continue with normal success processing
-        
-        // Debug: Log response body preview
-        error_log('SSP AI API Response: Body length: ' . strlen($response_body));
-        if (strlen($response_body) < 500) {
-            error_log('SSP AI API Response: Body preview: ' . substr($response_body, 0, 500));
-        }
-        
-        // Check if response body is empty
-        if (empty($response_body)) {
-            $this->last_error = 'Empty response body received from API. HTTP Code: ' . $response_code;
-            error_log('SSP AI API: Empty response body received');
-            return false;
-        }
-        
-        $data = json_decode($response_body, true);
-        
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            $this->last_error = 'Invalid JSON response from API. Error: ' . json_last_error_msg();
-            error_log('SSP AI: Invalid JSON response from API. JSON Error: ' . json_last_error_msg());
-            error_log('SSP AI: Response body (first 500 chars): ' . substr($response_body, 0, 500));
-            return false;
-        }
-        
-        // CRITICAL: Check if $data is null or not an array FIRST before accessing it
-        if (!is_array($data) || empty($data)) {
-            $this->last_error = 'Invalid API response: Response data is not a valid array. Response body: ' . substr($response_body, 0, 200);
-            error_log('SSP AI: Invalid API response - data is not an array or is empty');
-            return false;
-        }
-        
-        // Check for error in response (OpenRouter format) - check this before success path
-        if (isset($data['error'])) {
-            $error_msg = is_array($data['error']) ? ($data['error']['message'] ?? 'Unknown error') : $data['error'];
-            $this->last_error = 'API Error: ' . $error_msg;
-            error_log('SSP AI API Error in response: ' . $error_msg);
-            if (is_array($data['error']) && isset($data['error']['type'])) {
-                $this->last_error .= ' (Type: ' . $data['error']['type'] . ')';
-                error_log('SSP AI API Error Type: ' . $data['error']['type']);
-            }
-            return false;
-        }
-        
-        // Check for success response
-        if (isset($data['choices']) && is_array($data['choices']) && !empty($data['choices']) && isset($data['choices'][0]['message']['content'])) {
-            // Log API usage
-            $this->log_api_usage();
-            error_log('SSP AI API: Successfully received response');
-            return $data['choices'][0]['message']['content'];
-        }
-        
-        $response_keys = implode(', ', array_keys($data));
-        $this->last_error = 'Unexpected API response format. Expected "choices[0][message][content]", but got keys: ' . $response_keys;
-        error_log('SSP AI: Unexpected API response format. Response keys: ' . $response_keys);
-        error_log('SSP AI: Response data preview: ' . substr(print_r($data, true), 0, 500));
-        return false;
-    }
-    
+	 * Make API request to OpenAI/OpenRouter (GPT-3.5 → GPT-5 compatible)
+	 */
+	private function make_api_request($prompt, $max_tokens = 1000) {
+
+		// Reset last error
+		$this->last_error = '';
+
+		// Reload settings
+		$this->reload_settings();
+
+		// Basic validation
+		if (empty($this->api_key)) {
+			$this->last_error = "API key missing.";
+			return false;
+		}
+
+		$api_key = trim($this->api_key);
+		$base = rtrim($this->api_base_url, "/");
+
+		/** 
+		 * 🔍 Detect GPT-5
+		 */
+		$model_lower = strtolower($this->model);
+		$is_gpt5 = (
+			strpos($model_lower, 'gpt-5') === 0 ||
+			strpos($model_lower, 'gpt5') === 0
+		);
+
+		/**
+		 * 🚀 Route endpoint depending on model family
+		 */
+		if ($is_gpt5) {
+			$url = $base . "/responses";
+		} else {
+			$url = $base . "/chat/completions";
+		}
+
+		/**
+		 * 🧠 Build request body depending on model family
+		 */
+		if ($is_gpt5) {
+			// GPT-5+ schema
+			$body = array(
+				"model" => $this->model,
+				"input" => $prompt,
+				"max_output_tokens" => $max_tokens,
+				"temperature" => 1
+			);
+		} else {
+			// GPT-3.5 / GPT-4 / GPT-4o schema
+			$body = array(
+				"model" => $this->model,
+				"messages" => array(
+					array(
+						"role" => "user",
+						"content" => $prompt
+					)
+				),
+				"max_tokens" => $max_tokens,
+				"temperature" => 1
+			);
+		}
+
+		/**
+		 * Headers
+		 */
+		$headers = array(
+			"Authorization" => "Bearer {$api_key}",
+			"Content-Type"  => "application/json"
+		);
+
+		/**
+		 * Execute request
+		 */
+		$response = wp_remote_post($url, array(
+			"headers" => $headers,
+			"body" => json_encode($body),
+			"timeout" => 30,
+		));
+
+		if (is_wp_error($response)) {
+			$this->last_error = "Network error: " . $response->get_error_message();
+			return false;
+		}
+
+		$status = wp_remote_retrieve_response_code($response);
+		$raw = wp_remote_retrieve_body($response);
+
+		if ($status !== 200) {
+			$this->last_error = "API Error {$status}: " . $raw;
+			return false;
+		}
+
+		/**
+		 * Decode JSON
+		 */
+		$data = json_decode($raw, true);
+		if (!$data) {
+			$this->last_error = "Invalid JSON received.";
+			return false;
+		}
+
+		/**
+		 * GPT-5 extraction — supports ALL formats including nano/mini/pro
+		 */
+		if ($is_gpt5) {
+
+			// --- Format 1: Standard GPT-5 ---
+			if (isset($data['output_text'][0])) {
+				return trim($data['output_text'][0]);
+			}
+
+			if (isset($data['output_text']) && is_string($data['output_text'])) {
+				return trim($data['output_text']);
+			}
+
+			// --- Format 2: output → content → text (gpt-5-mini & gpt-5-pro) ---
+			if (isset($data['output'][0]['content'][0]['text'])) {
+				return trim($data['output'][0]['content'][0]['text']);
+			}
+
+			// --- Format 3: content[] (gpt-5.1 & gpt-5-mini alt format) ---
+			if (isset($data['content'][0]['text'])) {
+				return trim($data['content'][0]['text']);
+			}
+
+			// --- Format 4: GPT-5-nano → output[] blocks with "type":"message" ---
+			if (isset($data['output']) && is_array($data['output'])) {
+				foreach ($data['output'] as $block) {
+					if (isset($block['type']) && $block['type'] === 'message') {
+						if (isset($block['content'][0]['text'])) {
+							return trim($block['content'][0]['text']);
+						}
+					}
+				}
+			}
+
+			// --- Format 5: outputs[] array (gpt-5.1 older beta) ---
+			if (isset($data['outputs'][0])) {
+				return trim($data['outputs'][0]);
+			}
+
+			// --- Format 6: single-string fallback ---
+			if (isset($data['response']) && is_string($data['response'])) {
+				return trim($data['response']);
+			}
+
+			// --- No known formats matched ---
+			$this->last_error = "Unexpected GPT-5 format. Raw: " . substr(json_encode($data), 0, 500);
+			error_log("GPT-5 RAW (UNPARSED): " . print_r($data, true));
+			return false;
+		}
+
+		/**
+		 * 🎯 ChatGPT (3.5/4/4o) extraction
+		 */
+		if (isset($data['choices'][0]['message']['content'])) {
+			return trim($data['choices'][0]['message']['content']);
+		}
+
+		$this->last_error = "Unexpected response format.";
+		return false;
+	}
+
     /**
      * Parse anchor response
      */
@@ -1032,8 +859,8 @@ Include only the top 20 most relevant posts.";
         error_log('SSP AI Test Connection: API key validation passed, making API request...');
         
         // Use minimal prompt and tokens for test connection to avoid quota issues
-        $prompt = "Test";
-        $response = $this->make_api_request($prompt, 10); // Use only 10 max_tokens for test
+        $prompt = "Say: OK";
+        $response = $this->make_api_request($prompt, 300); // Use only 200 max_tokens for test
         
         if ($response === false) {
             error_log('SSP AI Test: API request failed - check error logs above for details');
