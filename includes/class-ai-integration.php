@@ -323,7 +323,7 @@ class SSP_AI_Integration {
             'post_type' => array('post', 'page'),
             'post_status' => 'publish',
             'exclude' => array($pillar_post_id),
-            'numberposts' => 100, // Get more for better AI analysis
+            'numberposts' => 40, // Get more for better AI analysis
             'orderby' => 'date',
             'order' => 'DESC'
         ));
@@ -334,11 +334,11 @@ class SSP_AI_Integration {
         }
         
         $prompt = $this->build_relevance_prompt($pillar_post, $posts);
-        $response = $this->make_api_request($prompt);
+        $response = $this->make_api_request($prompt, 4000); // Increase token limit for large responses
         
-        if ($response === false) {
-            error_log('SSP AI: API request failed when getting relevant posts for pillar: ' . $pillar_post_id);
-            return false; // Return false to indicate API error
+        if ($response === false && strpos($this->get_last_error(), 'max_output_tokens') !== false) {
+            // Retry with even higher limit
+            $response = $this->make_api_request($prompt, 8000);
         }
         
         if ($response) {
@@ -570,10 +570,13 @@ Include only the top 20 most relevant posts.";
 		/**
 		 * Execute request
 		 */
+        @set_time_limit(120);
+
 		$response = wp_remote_post($url, array(
 			"headers" => $headers,
 			"body" => json_encode($body),
-			"timeout" => 30,
+			"timeout" => 90,
+            "redirection" => 5,
 		));
 
 		if (is_wp_error($response)) {
