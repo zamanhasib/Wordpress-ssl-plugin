@@ -1,6 +1,6 @@
 <?php
 /**
- * Admin interface for Semantic Silo Pro
+ * Admin interface for Internal Linking Pro
  */
 
 if (!defined('ABSPATH')) {
@@ -35,8 +35,8 @@ class SSP_Admin_Interface {
      */
     public function add_admin_menu() {
         add_menu_page(
-            'Semantic Silo Pro',
-            'Silo Pro',
+            'Internal Linking Pro',
+            'Linking Pro',
             'manage_options',
             'semantic-silo-pro',
             array($this, 'admin_page'),
@@ -95,7 +95,7 @@ class SSP_Admin_Interface {
         }
         ?>
         <div class="wrap">
-            <h1>Semantic Silo Pro Dashboard</h1>
+            <h1>Internal Linking Pro Dashboard</h1>
             
             <div class="ssp-dashboard">
                 <div class="ssp-dashboard-stats">
@@ -249,7 +249,7 @@ class SSP_Admin_Interface {
         $settings = get_option('ssp_settings', array());
         ?>
         <div class="wrap">
-            <h1>Semantic Silo Pro Settings</h1>
+            <h1>Internal Linking Pro Settings</h1>
             
             <?php 
             // Debug: Check current settings before form
@@ -432,11 +432,11 @@ class SSP_Admin_Interface {
                 <div class="ssp-checkbox-list" style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; background: #fff;">
                     <?php
                     $all_posts = get_posts(array(
-                        'post_type' => array('post', 'page'),
-                        'post_status' => 'publish',
-                        'numberposts' => 100,
-                        'orderby' => 'title',
-                        'order' => 'ASC'
+                        'post_type'      => array('post', 'page'),
+                        'post_status'    => 'publish',
+                        'posts_per_page' => -1,  // ← load ALL pages and posts
+                        'orderby'        => 'title',
+                        'order'          => 'ASC'
                     ));
                     
                     // Separate pages and posts
@@ -490,7 +490,7 @@ class SSP_Admin_Interface {
                     $all_posts = get_posts(array(
                         'post_type' => array('post', 'page'),
                         'post_status' => 'publish',
-                        'numberposts' => 100,
+                        'posts_per_page' => -1,
                         'orderby' => 'title',
                         'order' => 'ASC'
                     ));
@@ -910,7 +910,7 @@ class SSP_Admin_Interface {
                         $all_posts = get_posts(array(
                             'post_type' => array('post', 'page'),
                             'post_status' => 'publish',
-                            'numberposts' => -1,
+                            'posts_per_page' => -1,
                             'orderby' => 'title',
                             'order' => 'ASC'
                         ));

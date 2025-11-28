@@ -1,6 +1,6 @@
 <?php
 /**
- * Logger class for Semantic Silo Pro
+ * Logger class for Internal Linking Pro
  */
 
 if (!defined('ABSPATH')) {

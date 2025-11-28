@@ -2268,7 +2268,7 @@ class SSP_Link_Engine {
             }
         }
         
-        // Strategy 4: Semantic relationships (preserve capitalization)
+        // Strategy 4: Internal Linking relationships (preserve capitalization)
         $semantic_anchor = $this->find_semantic_anchor_preserve_case($source_content_original, $source_content_lower, $target_content_original, $target_content_lower, $target_title);
         if ($semantic_anchor) {
             return $semantic_anchor;

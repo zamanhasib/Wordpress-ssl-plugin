@@ -1,5 +1,5 @@
 /**
- * Frontend JavaScript for Semantic Silo Pro
+ * Frontend JavaScript for Internal Linking Pro
  */
 
 (function($) {
@@ -7,10 +7,10 @@
     
     $(document).ready(function() {
         // Initialize frontend functionality
-        initSemanticSilo();
+        initInternalLinkingPro();
     });
     
-    function initSemanticSilo() {
+    function initInternalLinkingPro() {
         // Check if ssp_ajax object exists
         if (typeof ssp_ajax === 'undefined') {
             console.log('SSP: ssp_ajax object not found');

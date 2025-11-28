@@ -1,12 +1,12 @@
 <?php
 /**
- * Plugin Name: Semantic Silo Pro
- * Plugin URI: https://yoursite.com/semantic-silo-pro
+ * Plugin Name: Internal Linking Pro
+ * Plugin URI: https://yoursite.com/internal-linking-pro
  * Description: Build SEO-friendly content silos by connecting pillar pages with related posts using AI-powered recommendations and automated linking.
  * Version: 1.0.0
  * Author: Your Name
  * License: GPL v2 or later
- * Text Domain: semantic-silo-pro
+ * Text Domain: internal-linking-pro
  * Domain Path: /languages
  */
 
@@ -33,7 +33,7 @@ require_once SSP_PLUGIN_DIR . 'includes/class-logger.php';
 /**
  * Main plugin class
  */
-class Semantic_Silo_Pro {
+class Internal_Linking_Pro {
     
     /**
      * Single instance of the plugin
@@ -57,7 +57,7 @@ class Semantic_Silo_Pro {
         add_action('init', array($this, 'init'));
         register_activation_hook(__FILE__, array($this, 'activate'));
         register_deactivation_hook(__FILE__, array($this, 'deactivate'));
-        register_uninstall_hook(__FILE__, array('Semantic_Silo_Pro', 'uninstall'));
+        register_uninstall_hook(__FILE__, array('Internal_Linking_Pro', 'uninstall'));
     }
     
     /**
@@ -98,7 +98,7 @@ class Semantic_Silo_Pro {
         
         // Log plugin initialization
         if ($logger && method_exists($logger, 'info')) {
-            $logger->info('Semantic Silo Pro initialized', array(
+            $logger->info('Internal Linking Pro initialized', array(
                 'version' => SSP_VERSION,
                 'wp_version' => get_bloginfo('version')
             ));
@@ -259,9 +259,9 @@ class Semantic_Silo_Pro {
 }
 
 // Initialize the plugin
-function semantic_silo_pro() {
-    return Semantic_Silo_Pro::get_instance();
+function internal_linking_pro() {
+    return Internal_Linking_Pro::get_instance();
 }
 
 // Start the plugin
-semantic_silo_pro();
+internal_linking_pro();
