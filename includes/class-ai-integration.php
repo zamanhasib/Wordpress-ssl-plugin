@@ -784,60 +784,102 @@ Include only the top 20 most relevant posts.";
      * Parse relevance response
      */
     private function parse_relevance_response($response, $posts) {
+        // 1) Try JSON decode directly
         $decoded = json_decode($response, true);
-        
-        if (!is_array($decoded)) {
-            error_log('SSP AI: Relevance response is not a valid JSON array. Response: ' . substr($response, 0, 500));
-            
-            // Try to extract post IDs from response if JSON parsing failed
-            // Sometimes AI returns post IDs in different formats
-            preg_match_all('/"post_id"\s*:\s*(\d+)/i', $response, $matches);
-            if (!empty($matches[1])) {
-                $post_ids = array_map('intval', $matches[1]);
-                $post_lookup = array();
-                foreach ($posts as $post) {
-                    $post_lookup[$post->ID] = $post;
-                }
-                
-                $relevant_posts = array();
-                foreach ($post_ids as $post_id) {
-                    if (isset($post_lookup[$post_id])) {
-                        $relevant_posts[] = $post_lookup[$post_id];
+
+        $post_lookup = [];
+        foreach ($posts as $p) {
+            $post_lookup[$p->ID] = $p;
+        }
+
+        $results = [];
+
+        /* ------------------------------
+        * CASE 1: VALID JSON ARRAY
+        * ------------------------------ */
+        if (is_array($decoded)) {
+
+            // CASE 1A: Array of objects with post_id or id
+            if (isset($decoded[0]) && is_array($decoded[0])) {
+                foreach ($decoded as $item) {
+
+                    $id = null;
+
+                    if (isset($item['post_id'])) {
+                        $id = intval($item['post_id']);
+                    } elseif (isset($item['id'])) {
+                        $id = intval($item['id']);
+                    } elseif (isset($item['post']['id'])) {
+                        $id = intval($item['post']['id']);
+                    }
+
+                    if ($id && isset($post_lookup[$id])) {
+                        $results[] = $post_lookup[$id];
                     }
                 }
-                
-                if (!empty($relevant_posts)) {
-                    error_log('SSP AI: Successfully extracted post IDs from response using regex fallback');
-                    return $relevant_posts;
+
+                if (!empty($results)) {
+                    return $results;
                 }
             }
-            
-            return array();
-        }
-        
-        $relevant_posts = array();
-        $post_lookup = array();
-        
-        foreach ($posts as $post) {
-            $post_lookup[$post->ID] = $post;
-        }
-        
-        foreach ($decoded as $item) {
-            if (isset($item['post_id']) && isset($post_lookup[$item['post_id']])) {
-                $post_obj = $post_lookup[$item['post_id']];
-                // Store relevance score if provided
-                if (isset($item['relevance_score'])) {
-                    $post_obj->relevance_score = floatval($item['relevance_score']);
+
+            // CASE 1B: Nested formats like {"results":[{ "id": 123 }]}
+            $possible_keys = ['results','ranked','top_posts','data'];
+            foreach ($possible_keys as $key) {
+                if (isset($decoded[$key]) && is_array($decoded[$key])) {
+
+                    foreach ($decoded[$key] as $item) {
+
+                        $id = null;
+
+                        if (isset($item['post_id']))  $id = intval($item['post_id']);
+                        if (isset($item['id']))       $id = intval($item['id']);
+                        if (isset($item['post']['id'])) $id = intval($item['post']['id']);
+
+                        if ($id && isset($post_lookup[$id])) {
+                            $results[] = $post_lookup[$id];
+                        }
+                    }
+
+                    if (!empty($results)) {
+                        return $results;
+                    }
                 }
-                $relevant_posts[] = $post_obj;
             }
         }
-        
-        if (empty($relevant_posts) && !empty($decoded)) {
-            error_log('SSP AI: Parsed JSON array but no valid post IDs matched. Decoded: ' . print_r($decoded, true));
+
+        /* -----------------------------------
+        * CASE 2: RAW GPT-5-NANO TEXT OUTPUT
+        * Extract numbers like:
+        *  - "123"
+        *  - "1. 123"
+        *  - "IDs: 123, 456, 789"
+        * ----------------------------------- */
+
+        // Find ANY 2–5 digit post IDs
+        preg_match_all('/\b(\d{1,6})\b/', $response, $matches);
+
+        if (!empty($matches[1])) {
+            $ids = array_map('intval', $matches[1]);
+            $ids = array_unique($ids);
+
+            foreach ($ids as $id) {
+                if (isset($post_lookup[$id])) {
+                    $results[] = $post_lookup[$id];
+                }
+            }
+
+            if (!empty($results)) {
+                return $results;
+            }
         }
-        
-        return $relevant_posts;
+
+        /* ------------------------------------
+        * CASE 3: Nothing worked → return empty
+        * ------------------------------------ */
+        error_log("SSP AI: Relevance parse failed for GPT-5-nano output: " . substr($response, 0, 300));
+
+        return [];
     }
     
     /**

@@ -1508,78 +1508,109 @@ jQuery(document).ready(function($) {
     function displayAIRecommendationsModal(recommendations, formData, $form) {
         // Remove existing modal if any
         $('#ssp-ai-modal').remove();
-        
+
+        // Remove ALL old handlers
+        $(document).off('click', '#approve-ai-recommendations');
+        $('#approve-ai-recommendations').off('click');
+
+        // Lock background scrolling
+        $('body').addClass('ssp-modal-open');
+
         var modalHtml = '<div id="ssp-ai-modal" class="ssp-modal-overlay">';
         modalHtml += '<div class="ssp-modal-content">';
         modalHtml += '<span class="ssp-modal-close">&times;</span>';
         modalHtml += '<h2>🤖 AI Recommendations - Review & Approve</h2>';
+        modalHtml += '<div class="ssp-modal-body">';
         modalHtml += '<p>Select which posts to include in your silo(s):</p>';
-        
-        recommendations.forEach(function(rec, index) {
+
+        recommendations.forEach(function(rec) {
             modalHtml += '<div class="ssp-recommendation-group">';
             modalHtml += '<h3>📄 Pillar: ' + rec.pillar_title + '</h3>';
             modalHtml += '<div class="ssp-recommendations-list">';
-            
+
+            console.log("AI rec block:", rec);
+
+
             if (rec.recommendations && rec.recommendations.length > 0) {
+                
+                console.log("Rec posts:", rec.recommendations);
+                    
                 modalHtml += '<table class="wp-list-table widefat">';
                 modalHtml += '<thead><tr>';
-                modalHtml += '<th style="width: 40px;"><input type="checkbox" class="select-all-recs" data-pillar="' + rec.pillar_id + '" checked></th>';
+                modalHtml += '<th style="width:40px;"><input type="checkbox" class="select-all-recs" data-pillar="' + rec.pillar_id + '" checked></th>';
                 modalHtml += '<th>Post Title</th>';
-                modalHtml += '<th style="width: 100px;">Relevance</th>';
-                modalHtml += '<th style="width: 40%;">Excerpt</th>';
+                modalHtml += '<th style="width:100px;">Relevance</th>';
+                modalHtml += '<th style="width:40%;">Excerpt</th>';
                 modalHtml += '</tr></thead><tbody>';
-                
+
                 rec.recommendations.forEach(function(post) {
                     var relevancePercent = Math.round(post.relevance * 100);
-                    var relevanceClass = relevancePercent >= 80 ? 'high' : (relevancePercent >= 60 ? 'medium' : 'low');
-                    
+                    var relevanceClass = relevancePercent >= 80 ? 'high' :
+                                        relevancePercent >= 60 ? 'medium' : 'low';
+
                     modalHtml += '<tr>';
                     modalHtml += '<td><input type="checkbox" class="ai-rec-checkbox" data-pillar="' + rec.pillar_id + '" data-post="' + post.id + '" checked></td>';
                     modalHtml += '<td><strong>' + post.title + '</strong></td>';
                     modalHtml += '<td><span class="relevance-badge relevance-' + relevanceClass + '">' + relevancePercent + '%</span></td>';
-                    modalHtml += '<td style="font-size: 12px; color: #666;">' + post.excerpt + '</td>';
+                    modalHtml += '<td style="font-size:12px;color:#666;">' + post.excerpt + '</td>';
                     modalHtml += '</tr>';
                 });
-                
+
                 modalHtml += '</tbody></table>';
             } else {
                 modalHtml += '<p>No recommendations found for this pillar.</p>';
             }
-            
+
             modalHtml += '</div></div>';
         });
-        
+
+        modalHtml += '</div>'; // END modal-body
+
         modalHtml += '<div class="ssp-modal-actions">';
         modalHtml += '<button id="approve-ai-recommendations" class="button button-primary button-large">✓ Approve & Create Silo</button>';
         modalHtml += '<button id="cancel-ai-recommendations" class="button button-large">Cancel</button>';
         modalHtml += '</div>';
+
         modalHtml += '</div></div>';
-        
-        $('body').append(modalHtml);
-        
-        // Handle select all checkbox
-        $('.select-all-recs').on('change', function() {
-            var pillarId = $(this).data('pillar');
-            var isChecked = $(this).is(':checked');
-            $('.ai-rec-checkbox[data-pillar="' + pillarId + '"]').prop('checked', isChecked);
+
+        jQuery('#wpwrap').append(modalHtml);
+
+        // Select all checkboxes in a pillar
+        $(document).on('change', '.select-all-recs', function() {
+            var pid = $(this).data('pillar');
+            $('.ai-rec-checkbox[data-pillar="' + pid + '"]').prop('checked', $(this).is(':checked'));
         });
-        
-        // Handle approve button
-        $('#approve-ai-recommendations').on('click', function() {
-            createSiloWithApprovedRecommendations(recommendations, formData, $form);
-        });
-        
-        // Handle cancel button
-        $('#cancel-ai-recommendations, .ssp-modal-close').on('click', function() {
-            $('#ssp-ai-modal').remove();
-        });
-        
-        // Close on background click
-        $('#ssp-ai-modal').on('click', function(e) {
-            if ($(e.target).is('#ssp-ai-modal')) {
+
+        // Approve
+        $(document).on('click', '#approve-ai-recommendations', function(e) {
+            e.preventDefault();
+
+            console.log("DEBUG: Approve clicked. Found checkboxes:", $('.ai-rec-checkbox').length);
+
+            var ok = createSiloWithApprovedRecommendations(recommendations, formData, $form);
+            // Remove body lock before continuing
+            // Only close modal if valid
+            if (ok) {
+                $('body').removeClass('ssp-modal-open');
                 $('#ssp-ai-modal').remove();
             }
         });
+
+        // Cancel/close
+        $(document).on('click', '#cancel-ai-recommendations, .ssp-modal-close', function() {
+            $('body').removeClass('ssp-modal-open');
+            $('#ssp-ai-modal').remove();
+        });
+        
+        // Background click
+        $(document).on('click', '#ssp-ai-modal', function(e) {
+            if (e.target === this) {
+                $('body').removeClass('ssp-modal-open');
+                $('#ssp-ai-modal').remove();
+            }
+        });
+
+        return true;
     }
     
     /**
@@ -1589,7 +1620,7 @@ jQuery(document).ready(function($) {
         var approvedPosts = {};
         
         // Collect approved posts for each pillar
-        $('.ai-rec-checkbox:checked').each(function() {
+        $('#ssp-ai-modal .ai-rec-checkbox:checked').each(function() {
             var pillarId = $(this).data('pillar');
             var postId = $(this).data('post');
             
@@ -1601,12 +1632,9 @@ jQuery(document).ready(function($) {
         
         // Check if any posts were approved
         if (Object.keys(approvedPosts).length === 0) {
-            showNotice('Please select at least one post to include', 'error');
-            return;
+            showNotice('No AI posts available. Likely the AI response returned no recommendations.', 'error');
+            return false;
         }
-        
-        // Close modal
-        $('#ssp-ai-modal').remove();
         
         // Update form data with approved posts
         formData.approved_recommendations = JSON.stringify(approvedPosts);
@@ -1625,18 +1653,18 @@ jQuery(document).ready(function($) {
                 
                 if (response.success) {
                     showNotice('Silo created successfully!', 'success');
-                    setTimeout(function() {
-                        location.reload();
-                    }, 1500);
+                    setTimeout(() => location.reload(), 1500);
                 } else {
                     showNotice(response.data || 'Failed to create silo', 'error');
                 }
             },
             error: function() {
                 $submitBtn.prop('disabled', false).text('Create Silo');
-                showNotice(ssp_ajax.strings.error, 'error');
+                showNotice('Error creating silo', 'error');
             }
         });
+
+        return true;
     }
     
     /**

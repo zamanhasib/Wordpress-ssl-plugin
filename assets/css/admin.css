@@ -1,4 +1,4 @@
-/* Semantic Silo Pro Admin Styles */
+/* Internal Linking Pro Admin Styles */
 
 .ssp-admin-content {
     margin-top: 20px;
@@ -692,30 +692,82 @@
 }
 
 /* AI Recommendations Modal */
+
+/* Allow overlay scroll on mobile, prevent background scroll */
+body.ssp-modal-open {
+    overflow: hidden !important;
+}
+
+/* Keep overlay fixed, centered */
 .ssp-modal-overlay {
     position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.7);
+    background: rgba(0,0,0,0.65);
+    z-index: 999999;
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 999999;
+    padding: 20px; /* allows space around modal on small screens */
+    overflow-y: auto; /* helps tall modals on small screens */
 }
 
+/* Main modal container */
 .ssp-modal-content {
     background: #fff;
-    border-radius: 8px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-    max-width: 960px;
-    width: 92%;
-    max-height: 80vh;
+    border-radius: 10px;
+    max-width: 1100px;
+    width: 100%;
+    max-height: 90vh;       /* previously 80vh – increased */
     display: flex;
     flex-direction: column;
-    position: relative;
+    overflow: hidden;       /* prevents overflow outside modal */
 }
+
+/* Header stays fixed */
+.ssp-modal-content h2,
+.ssp-modal-close {
+    flex-shrink: 0;
+}
+
+/* Scroll only the modal body */
+.ssp-modal-content .ssp-modal-body {
+    overflow-y: auto !important;
+    padding: 20px 25px;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* Footer stays pinned */
+.ssp-modal-actions,
+.ssp-modal-footer {
+    flex-shrink: 0;
+    background: #fff;
+    border-top: 1px solid #eee;
+    padding: 15px 25px;
+    text-align: right;
+}
+
+/* Table inside modal scrolls horizontally if needed */
+.ssp-modal-content table {
+    width: 100%;
+    table-layout: auto;
+}
+
+/* Checkbox column should not shrink */
+.ssp-modal-content table th:first-child,
+.ssp-modal-content table td:first-child {
+    width: 40px;
+    white-space: nowrap;
+}
+
+/* Excerpt column wraps correctly */
+.ssp-modal-content table td:last-child {
+    white-space: normal;
+}
+
 
 .ssp-modal-close {
     position: absolute;
