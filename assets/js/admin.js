@@ -1582,18 +1582,28 @@ jQuery(document).ready(function($) {
         });
 
         // Approve
-        $(document).on('click', '#approve-ai-recommendations', function(e) {
+        $('#approve-ai-recommendations').off('click').on('click', function (e) {
             e.preventDefault();
 
-            console.log("DEBUG: Approve clicked. Found checkboxes:", $('.ai-rec-checkbox').length);
+            const $btn = $(this);
 
-            var ok = createSiloWithApprovedRecommendations(recommendations, formData, $form);
-            // Remove body lock before continuing
-            // Only close modal if valid
-            if (ok) {
-                $('body').removeClass('ssp-modal-open');
-                $('#ssp-ai-modal').remove();
-            }
+            // Disable button + show loading
+            $btn.prop('disabled', true).text('Processing...');
+
+            createSiloWithApprovedRecommendations(
+                recommendations,
+                formData,
+                $form,
+                function onSuccess() {
+                    // Close modal after success
+                    $('body').removeClass('ssp-modal-open');
+                    $('#ssp-ai-modal').remove();
+                },
+                function onFail() {
+                    // Re-enable on failure
+                    $btn.prop('disabled', false).text('Approve & Create Silo');
+                }
+            );
         });
 
         // Cancel/close
@@ -1616,56 +1626,98 @@ jQuery(document).ready(function($) {
     /**
      * Create silo with user-approved AI recommendations
      */
-    function createSiloWithApprovedRecommendations(recommendations, formData, $form) {
-        var approvedPosts = {};
-        
-        // Collect approved posts for each pillar
-        $('#ssp-ai-modal .ai-rec-checkbox:checked').each(function() {
-            var pillarId = $(this).data('pillar');
-            var postId = $(this).data('post');
-            
-            if (!approvedPosts[pillarId]) {
-                approvedPosts[pillarId] = [];
-            }
-            approvedPosts[pillarId].push(postId);
-        });
-        
-        // Check if any posts were approved
-        if (Object.keys(approvedPosts).length === 0) {
-            showNotice('No AI posts available. Likely the AI response returned no recommendations.', 'error');
-            return false;
-        }
-        
-        // Update form data with approved posts
-        formData.approved_recommendations = JSON.stringify(approvedPosts);
-        
-        // Show processing
-        var $submitBtn = $form.find('button[type="submit"]');
-        $submitBtn.prop('disabled', true).text(ssp_ajax.strings.processing);
-        
-        // Submit to create silo
-        $.ajax({
-            url: ssp_ajax.ajax_url,
-            type: 'POST',
-            data: formData,
-            success: function(response) {
-                $submitBtn.prop('disabled', false).text('Create Silo');
-                
-                if (response.success) {
-                    showNotice('Silo created successfully!', 'success');
-                    setTimeout(() => location.reload(), 1500);
-                } else {
-                    showNotice(response.data || 'Failed to create silo', 'error');
-                }
-            },
-            error: function() {
-                $submitBtn.prop('disabled', false).text('Create Silo');
-                showNotice('Error creating silo', 'error');
-            }
-        });
+    function createSiloWithApprovedRecommendations(
+	recommendations,
+	 formData,
+	 $form,
+	 onSuccess,
+	 onFail
+	) {
+		var approvedPosts = {};
 
-        return true;
-    }
+		// Collect selected posts from modal
+		$('.ai-rec-checkbox:checked').each(function () {
+			var pillarId = $(this).data('pillar');
+			var postId = $(this).data('post');
+
+			if (!approvedPosts[pillarId]) {
+				approvedPosts[pillarId] = [];
+			}
+			approvedPosts[pillarId].push(postId);
+		});
+
+		// If nothing selected → fail early
+		if (Object.keys(approvedPosts).length === 0) {
+			showNotice(
+				'Please select at least one post to include.',
+				'error'
+			);
+			if (onFail) onFail();
+			return false;
+		}
+
+		// Add AI-approved posts into form data
+		formData.approved_recommendations = JSON.stringify(approvedPosts);
+
+		// 🔥 CRITICAL FIX — Merge ALL form fields exactly like normal Create Silo
+		// This includes radio buttons, checkboxes, hidden fields and drop-downs.
+		$form.serializeArray().forEach(function (item) {
+			if (typeof formData[item.name] === 'undefined') {
+				formData[item.name] = item.value;
+			}
+		});
+
+		// Also include unchecked checkboxes that serializeArray ignores
+		$form.find('input[type="checkbox"]').each(function () {
+			var name = $(this).attr('name');
+			if (name && typeof formData[name] === 'undefined') {
+				formData[name] = $(this).is(':checked') ? '1' : '0';
+			}
+		});
+
+		// Disable main Create Silo button
+		var $submitBtn = $form.find('button[type="submit"]');
+		var originalText = $submitBtn.text();
+		$submitBtn.prop('disabled', true).text('Processing...');
+
+		// 🚀 AJAX — identical to Category-based silo creation
+		$.ajax({
+			url: ssp_ajax.ajax_url,
+			type: 'POST',
+			data: formData,
+
+			success: function (response) {
+				// Reset button
+				$submitBtn.prop('disabled', false).text(originalText);
+
+				if (response.success) {
+					showNotice('Silo created successfully!', 'success');
+
+					// Close modal (now correct timing)
+					if (onSuccess) onSuccess();
+
+					// Refresh to show new silo
+					setTimeout(function () {
+						location.reload();
+					}, 800);
+				} else {
+					showNotice(response.data || 'Failed to create silo.', 'error');
+					if (onFail) onFail();
+				}
+			},
+
+			error: function () {
+				$submitBtn.prop('disabled', false).text(originalText);
+				showNotice('Error creating silo.', 'error');
+				if (onFail) onFail();
+			}
+		});
+
+		return true;
+	}
+
+
+
     
     /**
      * Handle load anchor report
